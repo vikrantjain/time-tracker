@@ -72,9 +72,9 @@ if [ "$event" = "prompt" ]; then
   # it falls through to normal recording and reaches the model.
   if [ "${prompt:0:4}" = "\\tt " ]; then
     : # not a sentinel; fall through
-  elif [ "${prompt:0:3}" = "tt " ]; then
-    sentinel="${prompt:3}"                 # everything after 'tt '
-    action="${sentinel%% *}"               # first word
+  elif [ "$prompt" = "tt" ] || [ "${prompt:0:3}" = "tt " ]; then
+    sentinel="${prompt:3}"                 # everything after 'tt ' (empty for bare 'tt')
+    action="${sentinel%% *}"               # first word (empty for bare 'tt')
     rest="${sentinel#"$action"}"           # remaining filter string
 
     case "$action" in
@@ -120,8 +120,25 @@ if [ "$event" = "prompt" ]; then
         append_event "resume"
         emit_block "▶ Tracking resumed."
         ;;
+      help|"")
+        # Static help. Model-free and not recorded as activity, like every
+        # other tt sentinel. Bare `tt` lands here via the empty action.
+        emit_block "$(printf '%s\n' \
+          "time-tracker (tt) — session time tracking" \
+          "" \
+          "  tt report [filters]              Wall-clock + active-engagement per project/customer" \
+          "  tt add <dur> <target> \"<note>\"   Record out-of-session time (e.g. tt add 2h \"Acme\" \"call\")" \
+          "  tt pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
+          "  tt resume                        Resume tracking now" \
+          "  tt help                          Show this help" \
+          "" \
+          "Slash command:" \
+          "  /time-tracker:timesheet          Model-formatted timesheet over the tracked data" \
+          "" \
+          "Tip: prefix with a backslash (\\tt ...) to send a literal 'tt' line to the model.")"
+        ;;
       *)
-        emit_block "Unknown tt command: '${action}'. Available: report, pause, resume, add"
+        emit_block "Unknown tt command: '${action}'. Type 'tt help' for available commands."
         ;;
     esac
   fi
