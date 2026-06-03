@@ -12,6 +12,11 @@ Three layers:
 2. **JSONL store** — an append-only log keyed by absolute project path.
 3. **Report engine** (`scripts/report.py`, stdlib-only Python 3) — derives wall-clock and active-engagement at report time.
 
+### The two metrics
+
+- **Wall-clock** (the billable number) — total session time, unioned across overlapping concurrent sessions (never summed).
+- **Active-engagement** — wall-clock minus idle gaps longer than a threshold (default **15 min**, override with `--idle-threshold`, e.g. `--idle-threshold 30m`). Idle subtraction touches active-engagement only — wall-clock is never reduced by it.
+
 ## Enabling it
 
 Enable per project at **local** scope so the opt-in never lands in the customer's repo:

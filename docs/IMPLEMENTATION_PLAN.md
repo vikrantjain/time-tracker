@@ -102,22 +102,22 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 2.6 Test segmentation/union/missing-log plus edge cases: a `SessionStart` with no heartbeat (zero-duration under-count) and an interval spanning local midnight (correct day split) — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 3: Add the active-engagement overlay and idle threshold
-**Status:** todo
+**Status:** done
 **Depends on:** story-2
 **Context:** The secondary metric used to sanity-check and manually trim wall-clock before invoicing. Layers idle-gap subtraction onto the existing intervals without touching the wall-clock number.
 
 **Acceptance criteria:**
-- [ ] Active-engagement equals wall-clock minus every intra-sub-interval gap longer than the threshold (notably `stop`→next `prompt`); gaps at/under the threshold are not subtracted.
-- [ ] Wall-clock is unchanged by idle subtraction (the two columns can differ only downward for engagement).
-- [ ] `--idle-threshold` overrides the 15-minute default and changes which gaps are subtracted.
-- [ ] The table shows wall-clock and active-engagement side by side per project.
+- [x] Active-engagement equals wall-clock minus every intra-sub-interval gap longer than the threshold (notably `stop`→next `prompt`); gaps at/under the threshold are not subtracted. *(`active_spans` cuts strictly-greater-than-threshold gaps; `test_idle_gap_over_threshold...`, `test_gap_at_threshold_not_subtracted`.)*
+- [x] Wall-clock is unchanged by idle subtraction (the two columns can differ only downward for engagement). *(`test_wall_clock_unchanged_by_subtraction`: wc=70m, eng=10m.)*
+- [x] `--idle-threshold` overrides the 15-minute default and changes which gaps are subtracted. *(`test_threshold_override_changes_subtraction` + CLI run with `--idle-threshold 90m`.)*
+- [x] The table shows wall-clock and active-engagement side by side per project. *(Header now `| Project | Wall-clock (h) | Active-engagement (h) |`.)*
 
 **Tasks:**
-- [ ] 3.1 Compute gaps between consecutive events within each sub-interval — touches `scripts/report.py`
-- [ ] 3.2 Subtract gaps over the threshold from active-engagement only — touches `scripts/report.py`
-- [ ] 3.3 Add the `--idle-threshold` flag (default 15m) — touches `scripts/report.py`
-- [ ] 3.4 Add the active-engagement column to the table — touches `scripts/report.py`
-- [ ] 3.5 Test threshold boundary and the wall-clock-unchanged invariant — runs `python3 scripts/report.py` (against a fixture)
+- [x] 3.1 Compute gaps between consecutive events within each sub-interval — touches `scripts/report.py`
+- [x] 3.2 Subtract gaps over the threshold from active-engagement only — touches `scripts/report.py`
+- [x] 3.3 Add the `--idle-threshold` flag (default 15m) — touches `scripts/report.py`
+- [x] 3.4 Add the active-engagement column to the table — touches `scripts/report.py`
+- [x] 3.5 Test threshold boundary and the wall-clock-unchanged invariant — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 4: Map projects to customers and roll up totals
 **Status:** todo

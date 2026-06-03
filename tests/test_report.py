@@ -123,6 +123,77 @@ class UnionAndBuckets(unittest.TestCase):
         self.assertEqual(round(days[d2]), 1800)
 
 
+def project_engagement(intervals, threshold):
+    eng = report.engagement_by_project_day(intervals, threshold)
+    return {p: round(sum(days.values())) for p, days in eng.items()}
+
+
+class Engagement(unittest.TestCase):
+    THRESH = 15 * 60
+
+    def test_idle_gap_over_threshold_subtracted_from_engagement_only(self):
+        # 30-min gap between stop and next prompt -> idle (>15m), subtracted.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 10)),       # active 10:00-10:10
+            ev("prompt", "s", ts(2026, 3, 2, 10, 40)),     # 30m idle gap
+            ev("session_end", "s", ts(2026, 3, 2, 10, 50)),  # active 10:40-10:50
+        ]
+        ivs = report.build_intervals(evs)
+        # wall-clock spans the whole 50 min; engagement drops the 30-min gap.
+        self.assertEqual(project_seconds(ivs), {"/p/alpha": 3000})
+        self.assertEqual(project_engagement(ivs, self.THRESH), {"/p/alpha": 1200})
+
+    def test_gap_at_threshold_not_subtracted(self):
+        # Exactly 15-min gap must NOT be subtracted (strictly-greater rule).
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 15)),     # exactly 15m
+            ev("session_end", "s", ts(2026, 3, 2, 10, 20)),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(project_seconds(ivs), {"/p/alpha": 1200})
+        self.assertEqual(project_engagement(ivs, self.THRESH), {"/p/alpha": 1200})
+
+    def test_threshold_override_changes_subtraction(self):
+        # Two turns with a 10-min gap between them; active time on both ends.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 5)),        # active 10:00-10:05
+            ev("prompt", "s", ts(2026, 3, 2, 10, 15)),     # 10-min gap
+            ev("stop", "s", ts(2026, 3, 2, 10, 20)),       # active 10:15-10:20
+            ev("session_end", "s", ts(2026, 3, 2, 10, 20)),
+        ]
+        ivs = report.build_intervals(evs)
+        # 15-min threshold: 10-min gap kept -> full 20 min.
+        self.assertEqual(project_engagement(ivs, 15 * 60), {"/p/alpha": 1200})
+        # 5-min threshold: 10-min gap now exceeds it -> the two 5-min spans only.
+        self.assertEqual(project_engagement(ivs, 5 * 60), {"/p/alpha": 600})
+
+    def test_wall_clock_unchanged_by_subtraction(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 11, 0)),      # 1h idle
+            ev("session_end", "s", ts(2026, 3, 2, 11, 10)),
+        ]
+        ivs = report.build_intervals(evs)
+        wc = project_seconds(ivs)["/p/alpha"]
+        eng = project_engagement(ivs, self.THRESH)["/p/alpha"]
+        self.assertEqual(wc, 4200)        # full 70 min wall-clock
+        self.assertEqual(eng, 600)        # only the 10-min tail engaged
+        self.assertLess(eng, wc)
+
+    def test_parse_duration(self):
+        self.assertEqual(report.parse_duration("15"), 900)    # bare -> minutes
+        self.assertEqual(report.parse_duration("15m"), 900)
+        self.assertEqual(report.parse_duration("90s"), 90)
+        self.assertEqual(report.parse_duration("1.5h"), 5400)
+
+
 class EndToEnd(unittest.TestCase):
     def test_missing_log(self):
         self.assertEqual(report.build_report("/nonexistent/path.jsonl"),

@@ -30,6 +30,22 @@ import sys
 from datetime import datetime, timedelta, time
 
 HEARTBEAT_EVENTS = {"session_start", "prompt", "stop"}
+DEFAULT_IDLE_THRESHOLD_SECONDS = 15 * 60  # 15 minutes
+
+
+def parse_duration(text, bare_unit_seconds=60):
+    """Parse a duration like '15', '15m', '90s', '1.5h'.
+
+    A bare number uses `bare_unit_seconds` (minutes for --idle-threshold).
+    """
+    s = str(text).strip().lower()
+    if s.endswith("h"):
+        return float(s[:-1]) * 3600
+    if s.endswith("m"):
+        return float(s[:-1]) * 60
+    if s.endswith("s"):
+        return float(s[:-1])
+    return float(s) * bare_unit_seconds
 
 
 # --------------------------------------------------------------------------- #
@@ -157,12 +173,7 @@ def split_by_day(start, end):
         cur = seg_end
 
 
-def wall_clock_by_project_day(intervals):
-    """Return {project: {date: seconds}} of unioned wall-clock time."""
-    spans_by_project = {}
-    for iv in intervals:
-        spans_by_project.setdefault(iv["project"], []).append((iv["start"], iv["end"]))
-
+def _spans_to_project_days(spans_by_project):
     result = {}
     for project, spans in spans_by_project.items():
         day_secs = {}
@@ -173,6 +184,52 @@ def wall_clock_by_project_day(intervals):
     return result
 
 
+def wall_clock_by_project_day(intervals):
+    """Return {project: {date: seconds}} of unioned wall-clock time."""
+    spans_by_project = {}
+    for iv in intervals:
+        spans_by_project.setdefault(iv["project"], []).append((iv["start"], iv["end"]))
+    return _spans_to_project_days(spans_by_project)
+
+
+def active_spans(interval, threshold):
+    """Split a sub-interval into active spans by cutting out idle gaps.
+
+    An idle gap is a span between consecutive in-interval events (including the
+    session_start and the closing boundary) that is STRICTLY longer than
+    `threshold` seconds. Gaps at or under the threshold stay counted. A
+    zero-duration interval contributes no active span.
+    """
+    pts = sorted(set([interval["start"]] + list(interval["heartbeats"]) + [interval["end"]]))
+    spans = []
+    seg_start = interval["start"]
+    prev = interval["start"]
+    for t in pts:
+        if t <= prev:
+            continue
+        if t - prev > threshold:
+            if prev > seg_start:
+                spans.append((seg_start, prev))
+            seg_start = t
+        prev = t
+    if prev > seg_start:
+        spans.append((seg_start, prev))
+    return spans
+
+
+def engagement_by_project_day(intervals, threshold):
+    """Return {project: {date: seconds}} of unioned active-engagement time.
+
+    Active spans are unioned across sessions, so time that is idle in one
+    session but active in a concurrent one is still counted as engaged.
+    """
+    spans_by_project = {}
+    for iv in intervals:
+        for s, e in active_spans(iv, threshold):
+            spans_by_project.setdefault(iv["project"], []).append((s, e))
+    return _spans_to_project_days(spans_by_project)
+
+
 # --------------------------------------------------------------------------- #
 # Rendering                                                                   #
 # --------------------------------------------------------------------------- #
@@ -180,29 +237,36 @@ def fmt_hours(seconds):
     return f"{seconds / 3600:.2f}"
 
 
-def render_markdown(wc_by_project_day):
+def render_markdown(wc_by_project_day, eng_by_project_day):
     if not wc_by_project_day:
         return "No activity recorded."
-    lines = ["| Project | Wall-clock (h) |", "| --- | ---: |"]
-    total = 0.0
+    lines = [
+        "| Project | Wall-clock (h) | Active-engagement (h) |",
+        "| --- | ---: | ---: |",
+    ]
+    total_wc = 0.0
+    total_eng = 0.0
     for project in sorted(wc_by_project_day):
-        secs = sum(wc_by_project_day[project].values())
-        total += secs
-        lines.append(f"| {project or '(unknown)'} | {fmt_hours(secs)} |")
-    lines.append(f"| **Total** | **{fmt_hours(total)}** |")
+        wc = sum(wc_by_project_day[project].values())
+        eng = sum(eng_by_project_day.get(project, {}).values())
+        total_wc += wc
+        total_eng += eng
+        lines.append(f"| {project or '(unknown)'} | {fmt_hours(wc)} | {fmt_hours(eng)} |")
+    lines.append(f"| **Total** | **{fmt_hours(total_wc)}** | **{fmt_hours(total_eng)}** |")
     return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
 # CLI                                                                         #
 # --------------------------------------------------------------------------- #
-def build_report(events_path):
+def build_report(events_path, idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS):
     events = load_events(events_path)
     if not events:
         return "No activity recorded."
     intervals = build_intervals(events)
     wc = wall_clock_by_project_day(intervals)
-    return render_markdown(wc)
+    eng = engagement_by_project_day(intervals, idle_threshold)
+    return render_markdown(wc, eng)
 
 
 def main(argv=None):
@@ -211,11 +275,18 @@ def main(argv=None):
         "--dir",
         help="Store directory (default: $ACTIVITY_TRACKER_DIR or ~/activity-tracker).",
     )
+    parser.add_argument(
+        "--idle-threshold",
+        default="15m",
+        help="Idle gap above which time is excluded from active-engagement "
+        "(bare number = minutes; suffix s/m/h). Default 15m.",
+    )
     args = parser.parse_args(argv)
 
     sdir = store_dir(args.dir)
     events_path = os.path.join(sdir, "events.jsonl")
-    print(build_report(events_path))
+    idle = parse_duration(args.idle_threshold)
+    print(build_report(events_path, idle_threshold=idle))
     return 0
 
 
