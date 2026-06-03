@@ -38,9 +38,27 @@ Files:
 
 - `events.jsonl` — observed session events (auto-created on first event).
 - `manual.jsonl` — user-asserted time (see `tt add`).            <!-- detailed in a later story -->
-- `projects.toml` — hand-edited absolute-path → customer mapping. <!-- detailed in a later story -->
+- `projects.toml` — hand-edited absolute-path → customer mapping (see below).
 
 Each `events.jsonl` line is metadata only: `ts` (epoch), `iso`, `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end).
+
+### Mapping projects to customers
+
+Create `projects.toml` in the store directory. Each table key is the **absolute project path** (the `cwd` recorded at session start); `customer` is required, `name` is an optional display label:
+
+```toml
+["/home/vikrant/work/acme-website"]
+customer = "Acme Corp"
+name = "Acme Website"          # optional; defaults to the path
+
+["/home/vikrant/work/acme-api"]
+customer = "Acme Corp"         # multiple projects roll up under one customer
+
+["/home/vikrant/work/beta-app"]
+customer = "Beta LLC"
+```
+
+The file is read-only to the tool (you hand-edit it). A project that appears in the log but is **not** in `projects.toml` is shown flagged as `⚠ unmapped` — never silently dropped — so you always notice unbilled work. A missing `projects.toml` simply means every project is unmapped.
 
 ## Sentinel commands (no model turn)
 

@@ -120,21 +120,21 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 3.5 Test threshold boundary and the wall-clock-unchanged invariant — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 4: Map projects to customers and roll up totals
-**Status:** todo
+**Status:** done
 **Depends on:** story-2
 **Context:** Turns per-project numbers into the per-customer view billing needs, via the hand-edited `projects.toml`. Read-only config; unmapped projects must surface, never silently vanish.
 
 **Acceptance criteria:**
-- [ ] Projects are grouped under their `customer` (with optional display `name`) per `projects.toml`, read via stdlib `tomllib`.
-- [ ] A project present in the log but absent from `projects.toml` is shown flagged as "unmapped", not dropped.
-- [ ] A missing `projects.toml` is treated as "all projects unmapped" rather than an error.
+- [x] Projects are grouped under their `customer` (with optional display `name`) per `projects.toml`, read via stdlib `tomllib`. *(`load_projects` + grouped render; `test_mapped_rollup_under_customer` shows display name + per-customer subtotal.)*
+- [x] A project present in the log but absent from `projects.toml` is shown flagged as "unmapped", not dropped. *(`⚠ unmapped` group; `test_partial_mapping_flags_only_unmapped` confirms the unmapped project is still listed.)*
+- [x] A missing `projects.toml` is treated as "all projects unmapped" rather than an error. *(`test_missing_projects_toml_all_unmapped`; malformed file also degrades to empty via `test_malformed_toml_treated_as_empty`.)*
 
 **Tasks:**
-- [ ] 4.1 Load `projects.toml` via `tomllib`; missing file → empty map — touches `scripts/report.py`
-- [ ] 4.2 Group/roll up project totals under customer in the table — touches `scripts/report.py`
-- [ ] 4.3 Flag unmapped projects distinctly in the output — touches `scripts/report.py`
-- [ ] 4.4 Document the `projects.toml` shape with a sample — touches `README.md`
-- [ ] 4.5 Test mapped rollup, unmapped flagging, and missing-config paths — runs `python3 scripts/report.py` (against a fixture)
+- [x] 4.1 Load `projects.toml` via `tomllib`; missing file → empty map — touches `scripts/report.py`
+- [x] 4.2 Group/roll up project totals under customer in the table — touches `scripts/report.py`
+- [x] 4.3 Flag unmapped projects distinctly in the output — touches `scripts/report.py`
+- [x] 4.4 Document the `projects.toml` shape with a sample — touches `README.md`
+- [x] 4.5 Test mapped rollup, unmapped flagging, and missing-config paths — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 5: Add billing-period filters and CSV export
 **Status:** todo

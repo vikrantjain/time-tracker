@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import sys
+import tomllib
 from datetime import datetime, timedelta, time
 
 HEARTBEAT_EVENTS = {"session_start", "prompt", "stop"}
@@ -77,6 +78,23 @@ def load_events(path):
                 continue
             events.append(ev)
     return events
+
+
+def load_projects(path):
+    """Load the absolute-path -> {customer, name?} mapping from projects.toml.
+
+    Missing file -> {} (every project then renders as unmapped). A malformed
+    file is treated the same way rather than crashing the report.
+    """
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except (tomllib.TOMLDecodeError, OSError):
+        return {}
+    # Only keep table entries shaped like a project mapping.
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
 # --------------------------------------------------------------------------- #
@@ -237,36 +255,69 @@ def fmt_hours(seconds):
     return f"{seconds / 3600:.2f}"
 
 
-def render_markdown(wc_by_project_day, eng_by_project_day):
+UNMAPPED_LABEL = "⚠ unmapped"
+
+
+def render_markdown(wc_by_project_day, eng_by_project_day, projects=None):
     if not wc_by_project_day:
         return "No activity recorded."
-    lines = [
-        "| Project | Wall-clock (h) | Active-engagement (h) |",
-        "| --- | ---: | ---: |",
-    ]
-    total_wc = 0.0
-    total_eng = 0.0
-    for project in sorted(wc_by_project_day):
+    projects = projects or {}
+
+    groups = {}  # customer_label -> [(display, wc_seconds, eng_seconds)]
+    for project in wc_by_project_day:
+        mapping = projects.get(project, {})
+        customer = mapping.get("customer")
+        label = customer if customer else UNMAPPED_LABEL
+        display = mapping.get("name") or project or "(unknown)"
         wc = sum(wc_by_project_day[project].values())
         eng = sum(eng_by_project_day.get(project, {}).values())
-        total_wc += wc
-        total_eng += eng
-        lines.append(f"| {project or '(unknown)'} | {fmt_hours(wc)} | {fmt_hours(eng)} |")
-    lines.append(f"| **Total** | **{fmt_hours(total_wc)}** | **{fmt_hours(total_eng)}** |")
+        groups.setdefault(label, []).append((display, wc, eng))
+
+    lines = [
+        "| Customer | Project | Wall-clock (h) | Active-engagement (h) |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    # Mapped customers first (alphabetical), unmapped group last.
+    ordered = sorted(k for k in groups if k != UNMAPPED_LABEL)
+    if UNMAPPED_LABEL in groups:
+        ordered.append(UNMAPPED_LABEL)
+
+    total_wc = 0.0
+    total_eng = 0.0
+    for label in ordered:
+        items = sorted(groups[label])
+        sub_wc = 0.0
+        sub_eng = 0.0
+        for display, wc, eng in items:
+            lines.append(f"| {label} | {display} | {fmt_hours(wc)} | {fmt_hours(eng)} |")
+            sub_wc += wc
+            sub_eng += eng
+        if len(items) > 1:
+            lines.append(
+                f"| {label} | _subtotal_ | **{fmt_hours(sub_wc)}** | **{fmt_hours(sub_eng)}** |"
+            )
+        total_wc += sub_wc
+        total_eng += sub_eng
+    lines.append(f"| **Total** |  | **{fmt_hours(total_wc)}** | **{fmt_hours(total_eng)}** |")
     return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
 # CLI                                                                         #
 # --------------------------------------------------------------------------- #
-def build_report(events_path, idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS):
+def build_report(
+    events_path,
+    idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS,
+    projects_path=None,
+):
     events = load_events(events_path)
     if not events:
         return "No activity recorded."
     intervals = build_intervals(events)
     wc = wall_clock_by_project_day(intervals)
     eng = engagement_by_project_day(intervals, idle_threshold)
-    return render_markdown(wc, eng)
+    projects = load_projects(projects_path) if projects_path else {}
+    return render_markdown(wc, eng, projects)
 
 
 def main(argv=None):
@@ -285,8 +336,9 @@ def main(argv=None):
 
     sdir = store_dir(args.dir)
     events_path = os.path.join(sdir, "events.jsonl")
+    projects_path = os.path.join(sdir, "projects.toml")
     idle = parse_duration(args.idle_threshold)
-    print(build_report(events_path, idle_threshold=idle))
+    print(build_report(events_path, idle_threshold=idle, projects_path=projects_path))
     return 0
 
 

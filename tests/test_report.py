@@ -194,6 +194,76 @@ class Engagement(unittest.TestCase):
         self.assertEqual(report.parse_duration("1.5h"), 5400)
 
 
+def write_projects_toml(text):
+    fd, path = tempfile.mkstemp(suffix=".toml")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+class CustomerMapping(unittest.TestCase):
+    def _two_project_log(self):
+        return [
+            ev("session_start", "a", ts(2026, 3, 2, 10, 0), project="/p/acme"),
+            ev("session_end", "a", ts(2026, 3, 2, 11, 0), project="/p/acme"),
+            ev("session_start", "b", ts(2026, 3, 2, 10, 0), project="/p/beta"),
+            ev("session_end", "b", ts(2026, 3, 2, 11, 0), project="/p/beta"),
+        ]
+
+    def test_missing_projects_toml_all_unmapped(self):
+        self.assertEqual(report.load_projects("/nonexistent.toml"), {})
+        wc = report.wall_clock_by_project_day(report.build_intervals(self._two_project_log()))
+        out = report.render_markdown(wc, {}, {})
+        self.assertIn(report.UNMAPPED_LABEL, out)
+        self.assertIn("/p/acme", out)   # both projects listed under the unmapped group
+        self.assertIn("/p/beta", out)
+
+    def test_mapped_rollup_under_customer(self):
+        toml = (
+            '["/p/acme"]\n'
+            'customer = "Acme Corp"\n'
+            'name = "Acme Website"\n'
+            '["/p/beta"]\n'
+            'customer = "Acme Corp"\n'
+        )
+        path = write_projects_toml(toml)
+        try:
+            projects = report.load_projects(path)
+        finally:
+            os.remove(path)
+        wc = report.wall_clock_by_project_day(report.build_intervals(self._two_project_log()))
+        eng = report.engagement_by_project_day(
+            report.build_intervals(self._two_project_log()), 15 * 60
+        )
+        out = report.render_markdown(wc, eng, projects)
+        self.assertIn("Acme Corp", out)
+        self.assertIn("Acme Website", out)            # display name used
+        self.assertIn("_subtotal_", out)              # >1 project -> subtotal row
+        self.assertNotIn(report.UNMAPPED_LABEL, out)  # nothing unmapped
+        # subtotal wall-clock = 2.00h
+        self.assertIn("**2.00**", out)
+
+    def test_partial_mapping_flags_only_unmapped(self):
+        toml = '["/p/acme"]\ncustomer = "Acme Corp"\n'
+        path = write_projects_toml(toml)
+        try:
+            projects = report.load_projects(path)
+        finally:
+            os.remove(path)
+        wc = report.wall_clock_by_project_day(report.build_intervals(self._two_project_log()))
+        out = report.render_markdown(wc, {}, projects)
+        self.assertIn("Acme Corp", out)
+        self.assertIn(report.UNMAPPED_LABEL, out)
+        self.assertIn("/p/beta", out)  # unmapped project still listed, not dropped
+
+    def test_malformed_toml_treated_as_empty(self):
+        path = write_projects_toml("this is = = not valid toml [[[")
+        try:
+            self.assertEqual(report.load_projects(path), {})
+        finally:
+            os.remove(path)
+
+
 class EndToEnd(unittest.TestCase):
     def test_missing_log(self):
         self.assertEqual(report.build_report("/nonexistent/path.jsonl"),
