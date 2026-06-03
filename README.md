@@ -37,7 +37,7 @@ A single **visible** central directory, so billing data outlives plugin updates/
 Files:
 
 - `events.jsonl` — observed session events (auto-created on first event).
-- `manual.jsonl` — user-asserted time (see `tt add`).            <!-- detailed in a later story -->
+- `manual.jsonl` — user-asserted time written by `tt add` (separate from observed events).
 - `projects.toml` — hand-edited absolute-path → customer mapping (see below).
 
 Each `events.jsonl` line is metadata only: `ts` (epoch), `iso`, `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end).
@@ -87,7 +87,7 @@ Typed prompts beginning with the sentinel token **`tt `** are intercepted by the
 
 - `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
 - `tt pause` / `tt resume` — exclude a deliberate idle span (e.g. lunch) from a session you leave open. `tt pause` drops the clock; it auto-resumes on your next normal prompt, or sooner if you type `tt resume` (useful when you're back and reading before typing). The paused span is removed from **both** wall-clock and active-engagement. Markers are appended to the log (the log is never mutated) — they are not counted as activity.
-- `tt add <duration> <project-or-customer> "<note>"` — record out-of-session time.  <!-- Story 8 -->
+- `tt add <duration> <project-or-customer> "<note>"` — record billable time the hooks can't see (work outside Claude Code, or before the plugin was enabled). `<duration>` accepts `2h`, `90m`, or a bare number (= hours); a **negative** duration (`-30m`) records a correction. The target may be a project path or a customer name. Manual time is written to a separate `manual.jsonl` and appears in the report as a distinct `✎ manual` line under its customer — added to **wall-clock** but **excluded from active-engagement** (which is observed-only). A negative entry shows as its own adjustment, never netted into observed hours. Example: `tt add 2h "Acme Corp" "phone consult"`.
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 

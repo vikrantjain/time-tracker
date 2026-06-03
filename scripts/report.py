@@ -99,6 +99,25 @@ def load_projects(path):
     return {k: v for k, v in data.items() if isinstance(v, dict)}
 
 
+def load_manual(path):
+    """Load user-asserted time entries from manual.jsonl. Missing -> []."""
+    if not os.path.exists(path):
+        return []
+    entries = []
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if entry.get("source") == "manual":
+                entries.append(entry)
+    return entries
+
+
 # --------------------------------------------------------------------------- #
 # Segmentation                                                                #
 # --------------------------------------------------------------------------- #
@@ -369,36 +388,69 @@ def filter_by_customer(project_day, projects, customer):
     }
 
 
+def resolve_manual_rows(entries, projects, dfrom=None, dto=None, customer=None):
+    """Turn manual.jsonl entries into renderable rows.
+
+    Each row is a dict {customer, display, wc} where `wc` is seconds (possibly
+    negative for a correction). The `target` resolves to either a known project
+    path, a known customer name, or an unmapped label. Manual time carries NO
+    active-engagement (engagement is observed-only) and each entry stays a
+    DISTINCT row (a negative entry shows as its own adjustment, never netted
+    into observed hours).
+    """
+    known_customers = {m.get("customer") for m in projects.values() if m.get("customer")}
+    rows = []
+    for entry in entries:
+        # Date filter (manual entries carry their own local date).
+        d_raw = entry.get("date")
+        if (dfrom or dto) and d_raw:
+            try:
+                d = parse_date(d_raw)
+            except ValueError:
+                d = None
+            if d is not None:
+                if dfrom and d < dfrom:
+                    continue
+                if dto and d > dto:
+                    continue
+
+        target = entry.get("project", "")
+        if target in projects:
+            cust = projects[target].get("customer") or UNMAPPED_LABEL
+            base = projects[target].get("name") or target
+        elif target in known_customers:
+            cust = target
+            base = ""
+        else:
+            cust = UNMAPPED_LABEL
+            base = target
+
+        if customer is not None and cust != customer:
+            continue
+
+        try:
+            secs = parse_duration(entry.get("duration", "0"), bare_unit_seconds=3600)
+        except (ValueError, AttributeError):
+            continue
+        note = entry.get("note") or ""
+        label = "✎ manual"
+        if base:
+            label += f": {base}"
+        if note:
+            label += f" — {note}"
+        rows.append({"customer": cust, "display": label, "wc": secs})
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # Rendering                                                                   #
 # --------------------------------------------------------------------------- #
 UNMAPPED_LABEL = "⚠ unmapped"
 
 
-def render_csv(wc_by_project_day, eng_by_project_day, projects=None):
-    projects = projects or {}
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["customer", "project", "wall_clock_hours", "active_engagement_hours"])
-    rows = []
-    for project in wc_by_project_day:
-        mapping = projects.get(project, {})
-        customer = mapping.get("customer") or "unmapped"
-        display = mapping.get("name") or project or "(unknown)"
-        wc = sum(wc_by_project_day[project].values())
-        eng = sum(eng_by_project_day.get(project, {}).values())
-        rows.append((customer, display, fmt_hours(wc), fmt_hours(eng)))
-    for row in sorted(rows):
-        writer.writerow(row)
-    return buf.getvalue().rstrip("\n")
-
-
-def render_markdown(wc_by_project_day, eng_by_project_day, projects=None):
-    if not wc_by_project_day:
-        return "No activity recorded."
-    projects = projects or {}
-
-    groups = {}  # customer_label -> [(display, wc_seconds, eng_seconds)]
+def _build_groups(wc_by_project_day, eng_by_project_day, projects, manual_rows):
+    """customer_label -> list of {display, wc, eng} (eng is None for manual)."""
+    groups = {}
     for project in wc_by_project_day:
         mapping = projects.get(project, {})
         customer = mapping.get("customer")
@@ -406,27 +458,60 @@ def render_markdown(wc_by_project_day, eng_by_project_day, projects=None):
         display = mapping.get("name") or project or "(unknown)"
         wc = sum(wc_by_project_day[project].values())
         eng = sum(eng_by_project_day.get(project, {}).values())
-        groups.setdefault(label, []).append((display, wc, eng))
+        groups.setdefault(label, []).append({"display": display, "wc": wc, "eng": eng})
+    for row in manual_rows or []:
+        groups.setdefault(row["customer"], []).append(
+            {"display": row["display"], "wc": row["wc"], "eng": None}
+        )
+    return groups
+
+
+def _ordered_labels(groups):
+    ordered = sorted(k for k in groups if k != UNMAPPED_LABEL)
+    if UNMAPPED_LABEL in groups:
+        ordered.append(UNMAPPED_LABEL)
+    return ordered
+
+
+def render_csv(wc_by_project_day, eng_by_project_day, projects=None, manual_rows=None):
+    projects = projects or {}
+    groups = _build_groups(wc_by_project_day, eng_by_project_day, projects, manual_rows)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["customer", "project", "wall_clock_hours", "active_engagement_hours"])
+    out_rows = []
+    for label in groups:
+        cust = "unmapped" if label == UNMAPPED_LABEL else label
+        for row in groups[label]:
+            eng = "" if row["eng"] is None else fmt_hours(row["eng"])
+            out_rows.append((cust, row["display"], fmt_hours(row["wc"]), eng))
+    for row in sorted(out_rows):
+        writer.writerow(row)
+    return buf.getvalue().rstrip("\n")
+
+
+def render_markdown(wc_by_project_day, eng_by_project_day, projects=None, manual_rows=None):
+    if not wc_by_project_day and not manual_rows:
+        return "No activity recorded."
+    projects = projects or {}
+    groups = _build_groups(wc_by_project_day, eng_by_project_day, projects, manual_rows)
 
     lines = [
         "| Customer | Project | Wall-clock (h) | Active-engagement (h) |",
         "| --- | --- | ---: | ---: |",
     ]
-    # Mapped customers first (alphabetical), unmapped group last.
-    ordered = sorted(k for k in groups if k != UNMAPPED_LABEL)
-    if UNMAPPED_LABEL in groups:
-        ordered.append(UNMAPPED_LABEL)
-
     total_wc = 0.0
     total_eng = 0.0
-    for label in ordered:
-        items = sorted(groups[label])
+    for label in _ordered_labels(groups):
+        items = sorted(groups[label], key=lambda r: r["display"])
         sub_wc = 0.0
         sub_eng = 0.0
-        for display, wc, eng in items:
-            lines.append(f"| {label} | {display} | {fmt_hours(wc)} | {fmt_hours(eng)} |")
-            sub_wc += wc
-            sub_eng += eng
+        for row in items:
+            eng_cell = "—" if row["eng"] is None else fmt_hours(row["eng"])
+            lines.append(f"| {label} | {row['display']} | {fmt_hours(row['wc'])} | {eng_cell} |")
+            sub_wc += row["wc"]
+            if row["eng"] is not None:
+                sub_eng += row["eng"]
         if len(items) > 1:
             lines.append(
                 f"| {label} | _subtotal_ | **{fmt_hours(sub_wc)}** | **{fmt_hours(sub_eng)}** |"
@@ -444,19 +529,20 @@ def build_report(
     events_path,
     idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS,
     projects_path=None,
+    manual_path=None,
     date_from=None,
     date_to=None,
     customer=None,
     as_csv=False,
 ):
     events = load_events(events_path)
-    if not events:
-        return "No activity recorded."
+    projects = load_projects(projects_path) if projects_path else {}
+    manual_entries = load_manual(manual_path) if manual_path else []
+
     intervals = build_intervals(events)
     suppressed = compute_suppressed(events)
     wc = wall_clock_by_project_day(intervals, suppressed)
     eng = engagement_by_project_day(intervals, idle_threshold, suppressed)
-    projects = load_projects(projects_path) if projects_path else {}
 
     wc = filter_by_date(wc, date_from, date_to)
     eng = filter_by_date(eng, date_from, date_to)
@@ -464,11 +550,15 @@ def build_report(
         wc = filter_by_customer(wc, projects, customer)
         eng = filter_by_customer(eng, projects, customer)
 
-    if not wc:
+    manual_rows = resolve_manual_rows(
+        manual_entries, projects, date_from, date_to, customer
+    )
+
+    if not wc and not manual_rows:
         return "No activity recorded."
     if as_csv:
-        return render_csv(wc, eng, projects)
-    return render_markdown(wc, eng, projects)
+        return render_csv(wc, eng, projects, manual_rows)
+    return render_markdown(wc, eng, projects, manual_rows)
 
 
 def main(argv=None):
@@ -505,12 +595,14 @@ def main(argv=None):
     sdir = store_dir(args.dir)
     events_path = os.path.join(sdir, "events.jsonl")
     projects_path = os.path.join(sdir, "projects.toml")
+    manual_path = os.path.join(sdir, "manual.jsonl")
     idle = parse_duration(args.idle_threshold)
     print(
         build_report(
             events_path,
             idle_threshold=idle,
             projects_path=projects_path,
+            manual_path=manual_path,
             date_from=date_from,
             date_to=date_to,
             customer=args.customer,

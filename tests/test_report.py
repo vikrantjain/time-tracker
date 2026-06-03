@@ -441,6 +441,101 @@ class PauseResume(unittest.TestCase):
         self.assertEqual(report.subtract_intervals([(0, 100)], []), [(0, 100)])
 
 
+class ManualTime(unittest.TestCase):
+    def _manual_file(self, entries):
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for e in entries:
+                e.setdefault("source", "manual")
+                fh.write(json.dumps(e) + "\n")
+        return path
+
+    def _projects(self):
+        path = write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\nname = "Acme Website"\n')
+        try:
+            return report.load_projects(path), path
+        finally:
+            pass
+
+    def test_load_manual_filters_non_manual(self):
+        path = self._manual_file([
+            {"project": "/p/acme", "date": "2026-03-02", "duration": "2h", "note": "call"},
+            {"source": "other", "project": "/p/acme", "duration": "9h"},  # ignored
+        ])
+        try:
+            entries = report.load_manual(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["duration"], "2h")
+
+    def test_manual_in_wallclock_distinct_and_no_engagement(self):
+        projects = report.load_projects(
+            write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\n')
+        )
+        rows = report.resolve_manual_rows(
+            [{"project": "/p/acme", "date": "2026-03-02", "duration": "2h", "note": "phone call"}],
+            projects,
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["customer"], "Acme Corp")
+        self.assertIn("✎ manual", rows[0]["display"])     # distinct label
+        self.assertIn("phone call", rows[0]["display"])
+        self.assertEqual(rows[0]["wc"], 2 * 3600)
+        # Rendered: manual row carries no engagement ("—"); wall-clock counts it.
+        out = report.render_markdown({}, {}, projects, rows)
+        self.assertIn("✎ manual", out)
+        self.assertIn("2.00", out)
+        manual_line = next(l for l in out.splitlines() if "✎ manual" in l)
+        self.assertIn("—", manual_line)                    # engagement blank
+
+    def test_bare_duration_is_hours(self):
+        rows = report.resolve_manual_rows(
+            [{"project": "x", "duration": "3", "note": ""}], {}
+        )
+        self.assertEqual(rows[0]["wc"], 3 * 3600)
+
+    def test_negative_correction_reduces_total_distinctly(self):
+        projects = report.load_projects(
+            write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\n')
+        )
+        manual = [
+            {"project": "/p/acme", "date": "2026-03-02", "duration": "2h", "note": "added"},
+            {"project": "/p/acme", "date": "2026-03-02", "duration": "-30m", "note": "overbilled, correction"},
+        ]
+        rows = report.resolve_manual_rows(manual, projects)
+        self.assertEqual(len(rows), 2)                     # both kept as distinct rows
+        wcs = sorted(r["wc"] for r in rows)
+        self.assertEqual(wcs, [-1800, 7200])               # negative is its own adjustment
+        out = report.render_markdown({}, {}, projects, rows)
+        self.assertIn("correction", out)
+        # Net manual contribution to the customer subtotal/total = 1.5h.
+        self.assertIn("**1.50**", out)
+
+    def test_manual_via_build_report_and_date_filter(self):
+        events = write_log([
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0), project="/p/acme"),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0), project="/p/acme"),
+        ])
+        proj = write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\n')
+        manual = self._manual_file([
+            {"project": "/p/acme", "date": "2026-03-02", "duration": "2h", "note": "in range"},
+            {"project": "/p/acme", "date": "2026-04-15", "duration": "5h", "note": "out of range"},
+        ])
+        try:
+            f, t = report.month_range("2026-03")
+            out = report.build_report(
+                events, projects_path=proj, manual_path=manual, date_from=f, date_to=t
+            )
+        finally:
+            for p in (events, proj, manual):
+                os.remove(p)
+        self.assertIn("in range", out)
+        self.assertNotIn("out of range", out)   # April entry filtered out
+        # observed 1h + manual 2h = 3h subtotal for Acme.
+        self.assertIn("**3.00**", out)
+
+
 class EndToEnd(unittest.TestCase):
     def test_missing_log(self):
         self.assertEqual(report.build_report("/nonexistent/path.jsonl"),

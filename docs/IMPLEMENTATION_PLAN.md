@@ -193,21 +193,21 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 7.5 Test pause→explicit-resume, pause→next-real-prompt, and pause→session-end — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 8: Add out-of-session time via `tt add`
-**Status:** todo
+**Status:** done
 **Depends on:** story-6, story-4
 **Context:** Captures billable time the hooks structurally can't see — work outside Claude Code, or before the plugin was enabled (the enablement-gap recovery path). Writes a separate, distinctly-labeled ledger so an asserted hour is never mistaken for an observed one.
 
 **Acceptance criteria:**
-- [ ] `tt add <duration> <project-or-customer> "<note>"` writes one entry to a separate `manual.jsonl` with `project`, local `date`, `duration`, `note`, and `source: manual`, with no model turn and no `prompt` activity recorded.
-- [ ] Manual hours appear in the **wall-clock** total under their project/customer, rendered as a distinct "manual" line/label, and are **excluded from the active-engagement** figure (engagement is observed-only).
-- [ ] A negative duration records a deduction/correction and reduces the relevant wall-clock total (and is itself shown as a distinct manual adjustment, not silently netted into observed hours).
+- [x] `tt add <duration> <project-or-customer> "<note>"` writes one entry to a separate `manual.jsonl` with `project`, local `date`, `duration`, `note`, and `source: manual`, with no model turn and no `prompt` activity recorded. *(Bash check: entry shape verified; `events.jsonl` line count unchanged.)*
+- [x] Manual hours appear in the **wall-clock** total under their project/customer, rendered as a distinct "manual" line/label, and are **excluded from the active-engagement** figure (engagement is observed-only). *(`✎ manual` rows with `eng=None` → "—"; `test_manual_in_wallclock_distinct_and_no_engagement`; end-to-end report shows manual in wall-clock subtotal, engagement total unaffected.)*
+- [x] A negative duration records a deduction/correction and reduces the relevant wall-clock total (and is itself shown as a distinct manual adjustment, not silently netted into observed hours). *(`test_negative_correction_reduces_total_distinctly`: two distinct rows `-0.50`/`2.00`, subtotal net `1.50`; end-to-end shows `-0.50` adjustment row.)*
 
 **Tasks:**
-- [ ] 8.1 Handle `tt add` in the sentinel branch: parse duration/target/note, append to `manual.jsonl`, block, skip heartbeat — touches `hooks/scripts/track-event.sh`
-- [ ] 8.2 Read `manual.jsonl` (missing → none) and merge entries into totals — touches `scripts/report.py`
-- [ ] 8.3 Label manual hours distinctly in the table/CSV and handle negative durations — touches `scripts/report.py`
-- [ ] 8.4 Document `tt add` syntax and the manual-vs-observed distinction — touches `README.md`
-- [ ] 8.5 Test positive add, negative correction, and the distinct labeling — runs `python3 scripts/report.py` (against a fixture)
+- [x] 8.1 Handle `tt add` in the sentinel branch: parse duration/target/note, append to `manual.jsonl`, block, skip heartbeat — touches `hooks/scripts/track-event.sh`
+- [x] 8.2 Read `manual.jsonl` (missing → none) and merge entries into totals — touches `scripts/report.py`
+- [x] 8.3 Label manual hours distinctly in the table/CSV and handle negative durations — touches `scripts/report.py`
+- [x] 8.4 Document `tt add` syntax and the manual-vs-observed distinction — touches `README.md`
+- [x] 8.5 Test positive add, negative correction, and the distinct labeling — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 9: Optional `/activity-tracker:timesheet` slash command
 **Status:** todo

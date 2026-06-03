@@ -86,6 +86,29 @@ if [ "$event" = "prompt" ]; then
         [ -z "$out" ] && out="(no output)"
         emit_block "$out"
         ;;
+      add)
+        # tt add <duration> <project-or-customer> "<note>"
+        # Tokenized honoring quotes; duration kept as a string for the engine
+        # to parse (bare number = hours; suffix s/m/h; negative = correction).
+        mapfile -t aargs < <(printf '%s' "$rest" | xargs -n1 printf '%s\n' 2>/dev/null || true)
+        dur="${aargs[0]:-}"
+        target="${aargs[1]:-}"
+        note="${aargs[2]:-}"
+        if [ -z "$dur" ] || [ -z "$target" ]; then
+          emit_block "Usage: tt add <duration> <project-or-customer> \"<note>\"  (e.g. tt add 2h \"Acme Corp\" \"phone call\")"
+        fi
+        manual_file="${store_dir}/manual.jsonl"
+        jq -n -c \
+          --argjson ts "${now_ts:-0}" \
+          --arg iso "$now_iso" \
+          --arg project "$target" \
+          --arg date "$(date +%F)" \
+          --arg duration "$dur" \
+          --arg note "$note" \
+          '{ts: $ts, iso: $iso, source: "manual", project: $project, date: $date, duration: $duration, note: $note}' \
+          >> "$manual_file" 2>/dev/null || true
+        emit_block "✎ Recorded ${dur} to '${target}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+        ;;
       pause)
         # Record a pause MARKER (not a heartbeat) and block. The marker carries
         # session_id/project/ts; the engine treats the span until the next
@@ -98,7 +121,7 @@ if [ "$event" = "prompt" ]; then
         emit_block "▶ Tracking resumed."
         ;;
       *)
-        emit_block "Unknown tt command: '${action}'. Available: report, pause, resume"
+        emit_block "Unknown tt command: '${action}'. Available: report, pause, resume, add"
         ;;
     esac
   fi
