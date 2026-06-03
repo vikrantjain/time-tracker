@@ -1,6 +1,6 @@
 # Implementation Plan: Activity Tracker — Claude Code Time-Tracking Plugin
 
-**Status:** todo
+**Status:** done
 
 > **Status values.** `draft` = plan not yet human-approved (only at plan level). `todo` = approved/created, not started. `in-progress` = work has begun. `done` = all tasks and acceptance criteria checked.
 
@@ -210,15 +210,15 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 8.5 Test positive add, negative correction, and the distinct labeling — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 9: Optional `/activity-tracker:timesheet` slash command
-**Status:** todo
+**Status:** done
 **Depends on:** story-2
 **Context:** The opt-in conversational layer for when the user *wants* the model to format the table or walk through corrections (this path does cost a model turn, unlike the sentinels). Purely additive — nothing depends on it.
 
 **Acceptance criteria:**
-- [ ] `/activity-tracker:timesheet` invokes `report.py` and presents a formatted timesheet, optionally guiding manual corrections.
-- [ ] The command works without any sentinel infrastructure (it's a normal model-driven command path).
+- [x] `/activity-tracker:timesheet` invokes `report.py` and presents a formatted timesheet, optionally guiding manual corrections. *(Command instructs the model to run `report.py $ARGUMENTS`, present the table, flag unmapped/idle gaps, and suggest `tt add` corrections without mutating data.)*
+- [x] The command works without any sentinel infrastructure (it's a normal model-driven command path). *(Core action — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/report.py` reading `ACTIVITY_TRACKER_DIR` — runs end-to-end independent of the hook.)*
 
 **Tasks:**
-- [ ] 9.1 Author the command: instruct the model to run `report.py`, format the result, and offer correction guidance — touches `commands/timesheet.md` (new)
-- [ ] 9.2 Note in the README that this is the optional model-driven path vs. the no-model `tt report` sentinel — touches `README.md`
-- [ ] 9.3 Verify the command appears and runs end-to-end — no files
+- [x] 9.1 Author the command: instruct the model to run `report.py`, format the result, and offer correction guidance — touches `commands/timesheet.md` (new)
+- [x] 9.2 Note in the README that this is the optional model-driven path vs. the no-model `tt report` sentinel — touches `README.md`
+- [x] 9.3 Verify the command appears and runs end-to-end — no files

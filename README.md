@@ -81,6 +81,13 @@ python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 
 (`--month` cannot be combined with `--from`/`--to`.)
 
+### Two ways to get a report
+
+- **`tt report [filters]`** (sentinel) — instant, no model turn, no token cost. The result is shown only to you. This is the everyday path.
+- **`/activity-tracker:timesheet [filters]`** (slash command) — the optional **model-driven** path. Use it when you want Claude to format the table, explain the numbers, flag unmapped projects, or walk you through corrections conversationally. This one *does* cost a model turn.
+
+Both call the same `report.py` engine and accept the same filters.
+
 ## Sentinel commands (no model turn)
 
 Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model — no model turn, no token cost, and the prompt is **not** recorded as activity:
