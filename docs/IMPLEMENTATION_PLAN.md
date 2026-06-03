@@ -82,24 +82,24 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 1.7 No-coupling check: enable in project A only, run a session in unenabled project B, confirm B writes nothing — no files
 
 ### Story 2: Derive wall-clock per project as a Markdown table
-**Status:** todo
+**Status:** done
 **Depends on:** story-1
 **Context:** The core math and the engine's first output. Implements sub-interval segmentation + heartbeat-close + cross-session union — the rules that keep the billable number honest across resumes, crashes, and overlapping windows. Output is a per-project wall-clock table; customer grouping, engagement, filters, and CSV come later.
 
 **Acceptance criteria:**
-- [ ] On a fixture log, wall-clock equals the summed sub-interval durations, and a `SessionEnd`-less sub-interval is closed at its last heartbeat (not the next `SessionStart`), so a closed-overnight gap is not counted.
-- [ ] Two overlapping concurrent sessions in one project/day collapse to the **union** of their intervals (not the arithmetic sum).
-- [ ] Day bucketing uses local timezone and durations use epoch math (a sub-interval spanning a DST change is correct); an interval crossing local midnight is split so each day gets its portion (so later date/month filtering attributes time correctly).
-- [ ] A missing or empty `events.jsonl` yields "no activity" rather than an error.
-- [ ] Default output is a Markdown table listing each project with its wall-clock total.
+- [x] On a fixture log, wall-clock equals the summed sub-interval durations, and a `SessionEnd`-less sub-interval is closed at its last heartbeat (not the next `SessionStart`), so a closed-overnight gap is not counted. *(`test_missing_session_end_closes_at_last_heartbeat`, `test_closed_overnight_gap_not_counted`.)*
+- [x] Two overlapping concurrent sessions in one project/day collapse to the **union** of their intervals (not the arithmetic sum). *(`test_overlapping_concurrent_sessions_union_not_sum`: 2× 1h windows overlapping 30m → 1.5h.)*
+- [x] Day bucketing uses local timezone and durations use epoch math (a sub-interval spanning a DST change is correct); an interval crossing local midnight is split so each day gets its portion (so later date/month filtering attributes time correctly). *(`split_by_day` round-trips through local epoch; `test_interval_crossing_local_midnight_is_split`.)*
+- [x] A missing or empty `events.jsonl` yields "no activity" rather than an error. *(`test_missing_log`, `test_empty_log`.)*
+- [x] Default output is a Markdown table listing each project with its wall-clock total. *(`test_markdown_table_renders` + CLI sanity run.)*
 
 **Tasks:**
-- [ ] 2.1 Read and parse `events.jsonl`; treat missing/empty as no activity — touches `scripts/report.py` (new)
-- [ ] 2.2 Implement sub-interval segmentation with the heartbeat-close fallback — touches `scripts/report.py`
-- [ ] 2.3 Union overlapping concurrent intervals per project — touches `scripts/report.py`
-- [ ] 2.4 Bucket intervals into local-timezone days from epoch timestamps, splitting any interval that crosses a day boundary — touches `scripts/report.py`
-- [ ] 2.5 Emit the per-project wall-clock Markdown table (summed across days in range) — touches `scripts/report.py`
-- [ ] 2.6 Test segmentation/union/missing-log plus edge cases: a `SessionStart` with no heartbeat (zero-duration under-count) and an interval spanning local midnight (correct day split) — runs `python3 scripts/report.py` (against a fixture)
+- [x] 2.1 Read and parse `events.jsonl`; treat missing/empty as no activity — touches `scripts/report.py` (new)
+- [x] 2.2 Implement sub-interval segmentation with the heartbeat-close fallback — touches `scripts/report.py`
+- [x] 2.3 Union overlapping concurrent intervals per project — touches `scripts/report.py`
+- [x] 2.4 Bucket intervals into local-timezone days from epoch timestamps, splitting any interval that crosses a day boundary — touches `scripts/report.py`
+- [x] 2.5 Emit the per-project wall-clock Markdown table (summed across days in range) — touches `scripts/report.py`
+- [x] 2.6 Test segmentation/union/missing-log plus edge cases: a `SessionStart` with no heartbeat (zero-duration under-count) and an interval spanning local midnight (correct day split) — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 3: Add the active-engagement overlay and idle threshold
 **Status:** todo
