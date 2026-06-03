@@ -193,23 +193,90 @@ def split_by_day(start, end):
         cur = seg_end
 
 
-def _spans_to_project_days(spans_by_project):
+def subtract_intervals(spans, holes):
+    """Union `spans`, then remove the coverage of `holes`. Returns unioned spans."""
+    spans = union_intervals(spans)
+    holes = union_intervals(holes)
+    if not holes:
+        return spans
+    result = []
+    for s, e in spans:
+        cur = s
+        for hs, he in holes:
+            if he <= cur or hs >= e:
+                continue
+            if hs > cur:
+                result.append((cur, hs))
+            cur = max(cur, he)
+            if cur >= e:
+                break
+        if cur < e:
+            result.append((cur, e))
+    return result
+
+
+def _spans_to_project_days(spans_by_project, suppressed=None):
+    suppressed = suppressed or {}
     result = {}
     for project, spans in spans_by_project.items():
+        spans = subtract_intervals(spans, suppressed.get(project, []))
         day_secs = {}
-        for s, e in union_intervals(spans):
+        for s, e in spans:
             for d, secs in split_by_day(s, e):
                 day_secs[d] = day_secs.get(d, 0.0) + secs
         result[project] = day_secs
     return result
 
 
-def wall_clock_by_project_day(intervals):
-    """Return {project: {date: seconds}} of unioned wall-clock time."""
+def compute_suppressed(events):
+    """Return {project: [(start, end)]} of deliberately-paused spans.
+
+    A `pause` marker opens a suppressed span; it closes at the earliest of an
+    explicit `resume`, the next real `prompt` (auto-resume), a `session_end`,
+    or — if none appears — the session's last event. Spans are attributed to
+    the session's session_start project (cwd at start), matching segmentation.
+    """
+    by_session = {}
+    for ev in events:
+        by_session.setdefault(ev.get("session_id", ""), []).append(ev)
+
+    result = {}
+    for evs in by_session.values():
+        evs = sorted(evs, key=lambda e: e["ts"])
+        sproj = next(
+            (e.get("project", "") for e in evs if e.get("event") == "session_start"),
+            evs[0].get("project", "") if evs else "",
+        )
+        paused = False
+        pstart = None
+        last_ts = None
+        for ev in evs:
+            t = ev["ts"]
+            et = ev.get("event")
+            last_ts = t
+            if et == "pause":
+                if not paused:
+                    paused = True
+                    pstart = t
+            elif et in ("resume", "prompt", "session_end"):
+                if paused:
+                    result.setdefault(sproj, []).append((pstart, t))
+                    paused = False
+                    pstart = None
+        if paused:
+            result.setdefault(sproj, []).append((pstart, last_ts))
+    return result
+
+
+def wall_clock_by_project_day(intervals, suppressed=None):
+    """Return {project: {date: seconds}} of unioned wall-clock time.
+
+    `suppressed` (from compute_suppressed) is removed from the coverage.
+    """
     spans_by_project = {}
     for iv in intervals:
         spans_by_project.setdefault(iv["project"], []).append((iv["start"], iv["end"]))
-    return _spans_to_project_days(spans_by_project)
+    return _spans_to_project_days(spans_by_project, suppressed)
 
 
 def active_spans(interval, threshold):
@@ -237,17 +304,18 @@ def active_spans(interval, threshold):
     return spans
 
 
-def engagement_by_project_day(intervals, threshold):
+def engagement_by_project_day(intervals, threshold, suppressed=None):
     """Return {project: {date: seconds}} of unioned active-engagement time.
 
     Active spans are unioned across sessions, so time that is idle in one
     session but active in a concurrent one is still counted as engaged.
+    Deliberately-paused (`suppressed`) spans are also removed.
     """
     spans_by_project = {}
     for iv in intervals:
         for s, e in active_spans(iv, threshold):
             spans_by_project.setdefault(iv["project"], []).append((s, e))
-    return _spans_to_project_days(spans_by_project)
+    return _spans_to_project_days(spans_by_project, suppressed)
 
 
 # --------------------------------------------------------------------------- #
@@ -385,8 +453,9 @@ def build_report(
     if not events:
         return "No activity recorded."
     intervals = build_intervals(events)
-    wc = wall_clock_by_project_day(intervals)
-    eng = engagement_by_project_day(intervals, idle_threshold)
+    suppressed = compute_suppressed(events)
+    wc = wall_clock_by_project_day(intervals, suppressed)
+    eng = engagement_by_project_day(intervals, idle_threshold, suppressed)
     projects = load_projects(projects_path) if projects_path else {}
 
     wc = filter_by_date(wc, date_from, date_to)

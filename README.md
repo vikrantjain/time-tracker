@@ -86,7 +86,7 @@ python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model — no model turn, no token cost, and the prompt is **not** recorded as activity:
 
 - `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
-- `tt pause` / `tt resume` — exclude a deliberate idle span.  <!-- Story 7 -->
+- `tt pause` / `tt resume` — exclude a deliberate idle span (e.g. lunch) from a session you leave open. `tt pause` drops the clock; it auto-resumes on your next normal prompt, or sooner if you type `tt resume` (useful when you're back and reading before typing). The paused span is removed from **both** wall-clock and active-engagement. Markers are appended to the log (the log is never mutated) — they are not counted as activity.
 - `tt add <duration> <project-or-customer> "<note>"` — record out-of-session time.  <!-- Story 8 -->
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.

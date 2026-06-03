@@ -86,8 +86,19 @@ if [ "$event" = "prompt" ]; then
         [ -z "$out" ] && out="(no output)"
         emit_block "$out"
         ;;
+      pause)
+        # Record a pause MARKER (not a heartbeat) and block. The marker carries
+        # session_id/project/ts; the engine treats the span until the next
+        # resume / real prompt / session end as suppressed.
+        append_event "pause"
+        emit_block "⏸ Tracking paused for this session. Resume with 'tt resume' or just send your next prompt."
+        ;;
+      resume)
+        append_event "resume"
+        emit_block "▶ Tracking resumed."
+        ;;
       *)
-        emit_block "Unknown tt command: '${action}'. Available: report"
+        emit_block "Unknown tt command: '${action}'. Available: report, pause, resume"
         ;;
     esac
   fi

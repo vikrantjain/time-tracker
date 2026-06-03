@@ -176,21 +176,21 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 6.6 Run both build-time checks (no leaked activity; multi-line `reason` rendering) — no files
 
 ### Story 7: Exclude deliberate idle spans via `tt pause` / `tt resume`
-**Status:** todo
+**Status:** done
 **Depends on:** story-6, story-3
 **Context:** Lets the user drop a known gap (lunch) from a session they leave open, marked in the moment. Reuses the immutable log (markers, no mutation) and the sentinel plumbing from Story 6; the engine subtracts the span from both metrics.
 
 **Acceptance criteria:**
-- [ ] `tt pause` and `tt resume` append `pause`/`resume` markers (carrying `session_id`, `project`, `ts`) with no model turn and no recorded activity.
-- [ ] A paused span — from the `pause` marker to the earliest of an explicit `resume`, the next real (non-sentinel) `UserPromptSubmit`, or session end — is removed from **both** wall-clock and active-engagement.
-- [ ] Explicit `tt resume` restarts the clock before the next prompt (resuming while reading), distinct from auto-resume on the next real prompt.
+- [x] `tt pause` and `tt resume` append `pause`/`resume` markers (carrying `session_id`, `project`, `ts`) with no model turn and no recorded activity. *(Bash check: markers written with the three fields, block emitted, no heartbeat — `append_event` then `emit_block`.)*
+- [x] A paused span — from the `pause` marker to the earliest of an explicit `resume`, the next real (non-sentinel) `UserPromptSubmit`, or session end — is removed from **both** wall-clock and active-engagement. *(`compute_suppressed` earliest-of close rule + `subtract_intervals`; `test_pause_*` cover all three close cases; `test_pause_removed_from_engagement_too` proves a sub-threshold pause is dropped from engagement.)*
+- [x] Explicit `tt resume` restarts the clock before the next prompt (resuming while reading), distinct from auto-resume on the next real prompt. *(`test_pause_then_explicit_resume` vs `test_pause_auto_resumes_on_next_real_prompt`.)*
 
 **Tasks:**
-- [ ] 7.1 Handle `tt pause`/`tt resume` in the sentinel branch: append the marker, block, skip heartbeat — touches `hooks/scripts/track-event.sh`
-- [ ] 7.2 Recognise `pause`/`resume` in segmentation and compute the suppressed span with the earliest-of close rule — touches `scripts/report.py`
-- [ ] 7.3 Subtract the suppressed span from both wall-clock and active-engagement — touches `scripts/report.py`
-- [ ] 7.4 Document pause/resume and the auto-resume-vs-explicit distinction — touches `README.md`
-- [ ] 7.5 Test pause→explicit-resume, pause→next-real-prompt, and pause→session-end — runs `python3 scripts/report.py` (against a fixture)
+- [x] 7.1 Handle `tt pause`/`tt resume` in the sentinel branch: append the marker, block, skip heartbeat — touches `hooks/scripts/track-event.sh`
+- [x] 7.2 Recognise `pause`/`resume` in segmentation and compute the suppressed span with the earliest-of close rule — touches `scripts/report.py`
+- [x] 7.3 Subtract the suppressed span from both wall-clock and active-engagement — touches `scripts/report.py`
+- [x] 7.4 Document pause/resume and the auto-resume-vs-explicit distinction — touches `README.md`
+- [x] 7.5 Test pause→explicit-resume, pause→next-real-prompt, and pause→session-end — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 8: Add out-of-session time via `tt add`
 **Status:** todo

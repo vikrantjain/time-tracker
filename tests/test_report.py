@@ -364,6 +364,83 @@ class FiltersAndCsv(unittest.TestCase):
         self.assertEqual(out, "No activity recorded.")
 
 
+class PauseResume(unittest.TestCase):
+    THRESH = 15 * 60
+
+    def _wc_eng(self, evs):
+        ivs = report.build_intervals(evs)
+        sup = report.compute_suppressed(evs)
+        wc = report.wall_clock_by_project_day(ivs, sup)
+        eng = report.engagement_by_project_day(ivs, self.THRESH, sup)
+        sec = lambda d: {p: round(sum(v.values())) for p, v in d.items()}
+        return sec(wc), sec(eng)
+
+    def test_pause_then_explicit_resume(self):
+        # 1h session; paused 10:10-10:40 (30m) then explicitly resumed.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 10)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 10)),
+            ev("resume", "s", ts(2026, 3, 2, 10, 40)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 45)),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0)),
+        ]
+        wc, eng = self._wc_eng(evs)
+        # wall-clock 60m - 30m paused = 30m removed from BOTH metrics.
+        self.assertEqual(wc, {"/p/alpha": 1800})
+
+    def test_pause_auto_resumes_on_next_real_prompt(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 5)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 5)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 35)),   # 30m later -> auto-resume
+            ev("session_end", "s", ts(2026, 3, 2, 10, 45)),
+        ]
+        wc, _ = self._wc_eng(evs)
+        # 45m total - 30m paused = 15m.
+        self.assertEqual(wc, {"/p/alpha": 900})
+
+    def test_pause_until_session_end(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 20)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 20)),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0)),  # closes the pause
+        ]
+        wc, _ = self._wc_eng(evs)
+        # 60m total - 40m paused (10:20-11:00) = 20m.
+        self.assertEqual(wc, {"/p/alpha": 1200})
+
+    def test_pause_removed_from_engagement_too(self):
+        # A 5-min pause (UNDER the 15-min idle threshold) would otherwise be
+        # counted as engaged time; the marker must remove it from engagement.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 5)),    # active 10:00-10:05
+            ev("pause", "s", ts(2026, 3, 2, 10, 5)),
+            ev("resume", "s", ts(2026, 3, 2, 10, 10)),  # 5-min pause (< threshold)
+            ev("prompt", "s", ts(2026, 3, 2, 10, 10)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 15)),    # active 10:10-10:15
+            ev("session_end", "s", ts(2026, 3, 2, 10, 15)),
+        ]
+        wc, eng = self._wc_eng(evs)
+        # Without the pause the whole 15m is active; the 5m pause drops it to 10m.
+        self.assertEqual(wc, {"/p/alpha": 600})
+        self.assertEqual(eng, {"/p/alpha": 600})
+
+    def test_subtract_intervals_helper(self):
+        self.assertEqual(
+            report.subtract_intervals([(0, 100)], [(20, 30), (50, 60)]),
+            [(0, 20), (30, 50), (60, 100)],
+        )
+        self.assertEqual(report.subtract_intervals([(0, 100)], []), [(0, 100)])
+
+
 class EndToEnd(unittest.TestCase):
     def test_missing_log(self):
         self.assertEqual(report.build_report("/nonexistent/path.jsonl"),
