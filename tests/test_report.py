@@ -18,7 +18,7 @@ def ts(y, mo, d, h, mi=0, s=0):
 
 
 def ev(event, sid, t, project="/p/alpha", **extra):
-    out = {"ts": t, "iso": "", "event": event, "session_id": sid, "project": project}
+    out = {"ts": t, "event": event, "session_id": sid, "project": project}
     out.update(extra)
     return out
 

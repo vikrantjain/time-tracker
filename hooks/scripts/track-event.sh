@@ -32,7 +32,6 @@ source="$(printf '%s' "$payload" | jq -r '.source // ""' 2>/dev/null || true)"
 reason="$(printf '%s' "$payload" | jq -r '.reason // ""' 2>/dev/null || true)"
 
 now_ts="$(date +%s)"
-now_iso="$(date -Iseconds)"
 
 mkdir -p "$store_dir" 2>/dev/null || true
 
@@ -41,13 +40,12 @@ append_event() {
   local ev="$1"
   jq -n -c \
     --argjson ts "${now_ts:-0}" \
-    --arg iso "$now_iso" \
     --arg event "$ev" \
     --arg session_id "$session_id" \
     --arg project "$project" \
     --arg source "$source" \
     --arg reason "$reason" \
-    '{ts: $ts, iso: $iso, event: $event, session_id: $session_id, project: $project}
+    '{ts: $ts, event: $event, session_id: $session_id, project: $project}
      + (if $source != "" then {source: $source} else {} end)
      + (if $reason != "" then {reason: $reason} else {} end)' \
     >> "$events_file" 2>/dev/null || true

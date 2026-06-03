@@ -23,7 +23,6 @@ rest="${argline#"$action"}"      # remainder (report filters / add args)
 store_dir="${TIME_TRACKER_DIR:-$HOME/time-tracker}"
 events_file="${store_dir}/events.jsonl"
 now_ts="$(date +%s)"
-now_iso="$(date -Iseconds)"
 mkdir -p "$store_dir" 2>/dev/null || true
 
 # Append one metadata-only event line (used by pause/resume markers).
@@ -31,13 +30,12 @@ append_event() {
   local ev="$1"
   jq -n -c \
     --argjson ts "${now_ts:-0}" \
-    --arg iso "$now_iso" \
     --arg event "$ev" \
     --arg session_id "${TT_SESSION_ID:-}" \
     --arg project "${TT_PROJECT:-}" \
     --arg source "${TT_SOURCE:-}" \
     --arg reason "${TT_REASON:-}" \
-    '{ts: $ts, iso: $iso, event: $event, session_id: $session_id, project: $project}
+    '{ts: $ts, event: $event, session_id: $session_id, project: $project}
      + (if $source != "" then {source: $source} else {} end)
      + (if $reason != "" then {reason: $reason} else {} end)' \
     >> "$events_file" 2>/dev/null || true
@@ -73,6 +71,15 @@ case "$action" in
     if [ -z "$dur" ]; then
       emit_block "Usage: tt add <duration> [--to <project-or-customer>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" kickoff call)"
     fi
+    # Validate the duration BEFORE writing. Otherwise junk (e.g. `tt add fix
+    # the bug`) is written with duration="fix", confirmed as "Recorded", then
+    # silently dropped at report time (report.py's parse_duration raises and the
+    # row vanishes). Grammar mirrors parse_duration in report.py: optional '-',
+    # a number, optional s/m/h suffix (bare number = hours).
+    dur_re='^-?([0-9]+\.?[0-9]*|\.[0-9]+)[smh]?$'
+    if ! [[ "$dur" =~ $dur_re ]]; then
+      emit_block "tt add: '$dur' isn't a valid duration. Use 2h, 90m, 900s, or a bare number (= hours); prefix with - for a correction (e.g. -30m)."
+    fi
 
     # Split the remaining args into an optional --to <value> and the note words.
     target=""
@@ -107,18 +114,23 @@ case "$action" in
     fi
 
     manual_file="${store_dir}/manual.jsonl"
-    jq -n -c \
+    # Build the row first so we can echo back EXACTLY what landed in the file.
+    record="$(jq -n -c \
       --argjson ts "${now_ts:-0}" \
-      --arg iso "$now_iso" \
       --arg project "$target" \
       --arg date "$(date +%F)" \
       --arg duration "$dur" \
       --arg note "$note" \
-      '{ts: $ts, iso: $iso, source: "manual", project: $project, date: $date, duration: $duration, note: $note}' \
-      >> "$manual_file" 2>/dev/null || true
+      '{ts: $ts, source: "manual", project: $project, date: $date, duration: $duration, note: $note}' \
+      2>/dev/null)"
+    [ -n "$record" ] && printf '%s\n' "$record" >> "$manual_file" 2>/dev/null || true
     where="$target"
     [ "$defaulted" -eq 1 ] && where="$target (current project)"
-    emit_block "✎ Recorded ${dur} to '${where}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+    msg="✎ Recorded ${dur} to '${where}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+    # Show the verbatim stored line so the user can confirm the entry is right.
+    [ -n "$record" ] && msg="${msg}
+  saved: ${record}"
+    emit_block "$msg"
     ;;
   pause)
     # Record a pause MARKER (not a heartbeat). The engine treats the span until

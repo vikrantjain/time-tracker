@@ -85,5 +85,20 @@ export TT_PROJECT="/proj/acme-api"
 out="$(bash "$dispatch" "add 2h --to" | jq -r '.reason')"
 contains "--to needs value" "--to needs a value" "$out"
 
+# 8. Invalid duration -> rejected up front, nothing written (no silent loss).
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" "add bogus the bug" | jq -r '.reason')"
+contains "invalid duration rejected" "isn't a valid duration" "$out"
+check    "invalid duration no-write" "" "$(last_manual)"
+
+# 9. Successful add echoes back the verbatim saved JSON record.
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" "add 2h fixed login bug" | jq -r '.reason')"
+contains "echo saved label"    "saved:"             "$out"
+contains "echo saved duration" "\"duration\":\"2h\"" "$out"
+contains "echo saved note"     "fixed login bug"     "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -40,7 +40,7 @@ Files:
 - `manual.jsonl` — user-asserted time written by `tt add` (separate from observed events).
 - `projects.toml` — hand-edited absolute-path → customer mapping (see below).
 
-Each `events.jsonl` line is metadata only: `ts` (epoch), `iso`, `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end).
+Each `events.jsonl` line is metadata only: `ts` (epoch seconds, UTC instant), `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end). Local time and calendar day are derived from `ts` at report time using the machine's timezone — no human-readable timestamp is stored.
 
 ### Mapping projects to customers
 
