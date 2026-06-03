@@ -83,13 +83,13 @@ python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 
 ## Sentinel commands (no model turn)
 
-Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model:
+Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model — no model turn, no token cost, and the prompt is **not** recorded as activity:
 
-- `tt report [filters]` — print a timesheet.    <!-- Story 6 -->
+- `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
 - `tt pause` / `tt resume` — exclude a deliberate idle span.  <!-- Story 7 -->
 - `tt add <duration> <project-or-customer> "<note>"` — record out-of-session time.  <!-- Story 8 -->
 
-> If you ever need to send a real prompt that legitimately starts with `tt `, escape it (documented alongside the sentinel implementation).
+> **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 
 ## Status
 

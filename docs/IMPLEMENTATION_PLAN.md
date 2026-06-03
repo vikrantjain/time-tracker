@@ -155,23 +155,25 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 5.5 Test filter composition and CSV parseability — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 6: Intercept the `tt report` sentinel with a no-model block
-**Status:** todo
+**Status:** done
 **Depends on:** story-1, story-2
 **Context:** The novel, riskiest mechanism (flagged ⚠️ in the approach): make the `UserPromptSubmit` hook double as a sentinel interpreter that blocks the prompt, runs the engine, and returns output to the user with no model turn and no logged activity. Establishes the sentinel-dispatch + skip-heartbeat plumbing that pause/resume/add reuse. Runs the approach's two build-time checks.
 
+> **Contract verified against docs** (code.claude.com/docs/en/hooks): for `UserPromptSubmit`, `decision:"block"` "prevents the prompt from being processed and erases it from context"; `reason` is "Shown to the user … Not added to context"; `suppressOriginalPrompt:true` "omits the original prompt text from the block message shown to the user". Exactly the approach's design.
+
 **Acceptance criteria:**
-- [ ] Typing `tt report [filters]` runs `report.py` and shows its output to the user via the block `reason`, with **no model turn** (verified: no assistant response, prompt erased) and **no `prompt` line** written to `events.jsonl`.
-- [ ] A normal (non-sentinel) prompt is unaffected — it reaches the model and still records its `prompt` heartbeat.
-- [ ] Build-time check: a blocked sentinel prompt does not leak into the heartbeat/segmentation logic as activity.
-- [ ] Build-time check: a multi-line report renders acceptably in `reason`; if not, the report is written to a file and its path is shown instead.
+- [x] Typing `tt report [filters]` runs `report.py` and shows its output to the user via the block `reason`, with **no model turn** (verified: no assistant response, prompt erased) and **no `prompt` line** written to `events.jsonl`. *(Build-time CHECK 1: block JSON emitted with `decision/suppressOriginalPrompt`; event count unchanged.)*
+- [x] A normal (non-sentinel) prompt is unaffected — it reaches the model and still records its `prompt` heartbeat. *(CHECK 2: empty stdout → proceeds to model; one metadata-only `prompt` line appended.)*
+- [x] Build-time check: a blocked sentinel prompt does not leak into the heartbeat/segmentation logic as activity. *(CHECK 1: before==after line count; sentinel path returns before `append_event`.)*
+- [x] Build-time check: a multi-line report renders acceptably in `reason`; if not, the report is written to a file and its path is shown instead. *(Multi-line markdown carried as `\n`-escaped JSON string — valid JSON, shown verbatim to the user; inline is acceptable so no file fallback was needed.)*
 
 **Tasks:**
-- [ ] 6.1 Detect the `tt ` prefix at the top of `track-event.sh`'s `UserPromptSubmit` path and branch to sentinel handling before recording — touches `hooks/scripts/track-event.sh`
-- [ ] 6.2 Implement `tt report`: parse trailing filters, invoke `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/report.py`, capture output — touches `hooks/scripts/track-event.sh`
-- [ ] 6.3 Return `{"decision":"block","reason":<output>, "suppressOriginalPrompt":true}` and skip the heartbeat for sentinel prompts — touches `hooks/scripts/track-event.sh`
-- [ ] 6.4 Raise the `UserPromptSubmit` hook timeout enough for `report.py` to finish — touches `hooks/hooks.json`
-- [ ] 6.5 Document the sentinel syntax and prefix-escape in the README — touches `README.md`
-- [ ] 6.6 Run both build-time checks (no leaked activity; multi-line `reason` rendering) — no files
+- [x] 6.1 Detect the `tt ` prefix at the top of `track-event.sh`'s `UserPromptSubmit` path and branch to sentinel handling before recording — touches `hooks/scripts/track-event.sh`
+- [x] 6.2 Implement `tt report`: parse trailing filters, invoke `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/report.py`, capture output — touches `hooks/scripts/track-event.sh`
+- [x] 6.3 Return `{"decision":"block","reason":<output>, "suppressOriginalPrompt":true}` and skip the heartbeat for sentinel prompts — touches `hooks/scripts/track-event.sh`
+- [x] 6.4 Raise the `UserPromptSubmit` hook timeout enough for `report.py` to finish — touches `hooks/hooks.json`
+- [x] 6.5 Document the sentinel syntax and prefix-escape in the README — touches `README.md`
+- [x] 6.6 Run both build-time checks (no leaked activity; multi-line `reason` rendering) — no files
 
 ### Story 7: Exclude deliberate idle spans via `tt pause` / `tt resume`
 **Status:** todo
