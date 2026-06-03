@@ -4,3 +4,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# Design/planning docs — kept locally, not shipped with the plugin
+docs/
