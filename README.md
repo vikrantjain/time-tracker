@@ -1,4 +1,4 @@
-# Activity Tracker
+# Time Tracker
 
 A Claude Code plugin that records how much **wall-clock time** you spend working *with Claude Code* in each project — so you can bill customers per project and analyse your own productivity.
 
@@ -22,7 +22,7 @@ Three layers:
 Enable per project at **local** scope so the opt-in never lands in the customer's repo:
 
 ```
-/plugin   # enable activity-tracker for this project (writes .claude/settings.local.json, which is gitignored)
+/plugin   # enable time-tracker for this project (writes .claude/settings.local.json, which is gitignored)
 ```
 
 Project/local-scoped plugins load hooks **only** for that project — there is no cross-project coupling.
@@ -31,8 +31,8 @@ Project/local-scoped plugins load hooks **only** for that project — there is n
 
 A single **visible** central directory, so billing data outlives plugin updates/uninstalls (the plugin dir is wiped on both):
 
-- Default: `~/activity-tracker/`
-- Override: set `ACTIVITY_TRACKER_DIR` to an absolute path.
+- Default: `~/time-tracker/`
+- Override: set `TIME_TRACKER_DIR` to an absolute path.
 
 Files:
 
@@ -71,7 +71,7 @@ The file is read-only to the tool (you hand-edit it). A project that appears in 
 | `--customer "<name>"` | Restrict to one customer's projects. |
 | `--idle-threshold <dur>` | Idle gap above which time is dropped from active-engagement (e.g. `30m`, `900s`, `1h`; bare number = minutes). |
 | `--csv` | Emit CSV (one row per customer/project) instead of the Markdown table. |
-| `--dir <path>` | Override the store directory (defaults to `$ACTIVITY_TRACKER_DIR` or `~/activity-tracker`). |
+| `--dir <path>` | Override the store directory (defaults to `$TIME_TRACKER_DIR` or `~/time-tracker`). |
 
 Filters compose, e.g. a customer's invoice for one month as CSV:
 
@@ -84,7 +84,7 @@ python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 ### Two ways to get a report
 
 - **`tt report [filters]`** (sentinel) — instant, no model turn, no token cost. The result is shown only to you. This is the everyday path.
-- **`/activity-tracker:timesheet [filters]`** (slash command) — the optional **model-driven** path. Use it when you want Claude to format the table, explain the numbers, flag unmapped projects, or walk you through corrections conversationally. This one *does* cost a model turn.
+- **`/time-tracker:timesheet [filters]`** (slash command) — the optional **model-driven** path. Use it when you want Claude to format the table, explain the numbers, flag unmapped projects, or walk you through corrections conversationally. This one *does* cost a model turn.
 
 Both call the same `report.py` engine and accept the same filters.
 

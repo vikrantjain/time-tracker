@@ -1,5 +1,5 @@
 #!/bin/bash
-# Activity Tracker — capture hook + sentinel interpreter.
+# Time Tracker — capture hook + sentinel interpreter.
 #
 # Usage: track-event.sh <event>
 #   event ∈ { session_start | prompt | stop | session_end }
@@ -16,7 +16,7 @@
 # A non-sentinel prompt falls through and is recorded as a normal heartbeat.
 #
 # The store lives OUTSIDE the plugin dir (wiped on update/uninstall):
-#   ${ACTIVITY_TRACKER_DIR:-$HOME/activity-tracker}/events.jsonl
+#   ${TIME_TRACKER_DIR:-$HOME/time-tracker}/events.jsonl
 #
 # This hook must never break the user's session: it always exits 0 and swallows
 # its own errors (a missing line is preferable to a blocked prompt).
@@ -24,7 +24,7 @@
 event="${1:-}"
 payload="$(cat 2>/dev/null || true)"
 
-store_dir="${ACTIVITY_TRACKER_DIR:-$HOME/activity-tracker}"
+store_dir="${TIME_TRACKER_DIR:-$HOME/time-tracker}"
 events_file="${store_dir}/events.jsonl"
 
 # Metadata only (no prompt/response text is ever read into a stored field).
@@ -81,7 +81,7 @@ if [ "$event" = "prompt" ]; then
       report)
         # Tokenize the filter string honoring quotes WITHOUT invoking a shell
         # (xargs parses quotes/escapes but never runs the tokens as a command).
-        mapfile -t rargs < <(printf '%s' "$rest" | xargs -n1 printf '%s\n' 2>/dev/null || true)
+        mapfile -t rargs < <(printf '%s' "$rest" | xargs -r -n1 printf '%s\n' 2>/dev/null || true)
         out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" "${rargs[@]}" 2>&1)"
         [ -z "$out" ] && out="(no output)"
         emit_block "$out"
@@ -90,7 +90,7 @@ if [ "$event" = "prompt" ]; then
         # tt add <duration> <project-or-customer> "<note>"
         # Tokenized honoring quotes; duration kept as a string for the engine
         # to parse (bare number = hours; suffix s/m/h; negative = correction).
-        mapfile -t aargs < <(printf '%s' "$rest" | xargs -n1 printf '%s\n' 2>/dev/null || true)
+        mapfile -t aargs < <(printf '%s' "$rest" | xargs -r -n1 printf '%s\n' 2>/dev/null || true)
         dur="${aargs[0]:-}"
         target="${aargs[1]:-}"
         note="${aargs[2]:-}"

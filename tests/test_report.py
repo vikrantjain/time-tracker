@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the Activity Tracker report engine (stdlib unittest)."""
+"""Tests for the Time Tracker report engine (stdlib unittest)."""
 
 import json
 import os

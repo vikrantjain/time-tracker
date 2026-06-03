@@ -1,4 +1,4 @@
-# Implementation Plan: Activity Tracker — Claude Code Time-Tracking Plugin
+# Implementation Plan: Time Tracker — Claude Code Time-Tracking Plugin
 
 **Status:** done
 
@@ -7,7 +7,7 @@
 **Last updated:** 2026-06-03
 **Provenance:** Approach captured in [APPROACH.md](./APPROACH.md)
 
-## Epic: Activity Tracker plugin
+## Epic: Time Tracker plugin
 
 **Goal:** Build a Claude Code plugin that, when enabled in a project, automatically records how much wall-clock time is spent working *with Claude Code* in that project, so the user can produce a trustworthy per-customer / per-project time report for billing — and an active-engagement overlay for productivity analysis and manual idle-correction. Capture is passive (hooks); reporting and corrections are on demand and cost no model turn.
 
@@ -21,7 +21,7 @@
 - **Active-engagement** = wall-clock minus idle gaps longer than a threshold (default **15 min**, `--idle-threshold` flag). Idle subtraction touches active-engagement **only**, never wall-clock.
 - **Day bucketing & filters** use the machine's **local timezone**; durations come from epoch timestamps so they're DST-safe.
 
-*Storage.* A single **visible** central dir, default `~/activity-tracker/` (override `ACTIVITY_TRACKER_DIR`), holding `events.jsonl` (observed), `manual.jsonl` (user-asserted), and a hand-edited `projects.toml` (absolute-path → customer mapping, read-only via stdlib `tomllib`). Records are keyed by **absolute project path** = `cwd` at `SessionStart`; mid-session `cd` is ignored. The store lives **outside the plugin dir** deliberately: `${CLAUDE_PLUGIN_ROOT}` is wiped on update and `${CLAUDE_PLUGIN_DATA}` on uninstall, but billing data must outlive both. Each event line is **metadata only** (no prompt/response text): `ts`, `iso`, `event`, `session_id`, `project`, plus `source`/`reason` matchers where relevant.
+*Storage.* A single **visible** central dir, default `~/time-tracker/` (override `TIME_TRACKER_DIR`), holding `events.jsonl` (observed), `manual.jsonl` (user-asserted), and a hand-edited `projects.toml` (absolute-path → customer mapping, read-only via stdlib `tomllib`). Records are keyed by **absolute project path** = `cwd` at `SessionStart`; mid-session `cd` is ignored. The store lives **outside the plugin dir** deliberately: `${CLAUDE_PLUGIN_ROOT}` is wiped on update and `${CLAUDE_PLUGIN_DATA}` on uninstall, but billing data must outlive both. Each event line is **metadata only** (no prompt/response text): `ts`, `iso`, `event`, `session_id`, `project`, plus `source`/`reason` matchers where relevant.
 
 *User actions with no install and no model turn.* Pause/resume/add/report are **typed sentinel commands** (default prefix `tt `, e.g. `tt pause`, `tt resume`, `tt add 2h Acme "note"`, `tt report [filters]`). The plugin's own `UserPromptSubmit` hook recognises a sentinel, performs the action, returns the result in the block `reason` (shown to the **user**, not Claude), and returns `{"decision":"block", ...}` with `suppressOriginalPrompt: true` — so **no model turn runs** and the sentinel prompt is **not** recorded as activity. Non-sentinel prompts proceed normally and *are* recorded as heartbeats. This is the only mechanism that is simultaneously no-install, no-model, no-activity, and entirely in-plugin.
 
@@ -39,7 +39,7 @@
 
 ## Assumptions
 
-- **Manifest values** — `name: activity-tracker`, `version: 0.1.0`, `author: { name: "Vikrant Jain" }`, with `keywords` like `time-tracking`, `billing`, `hooks`. Matches every sibling plugin's `plugin.json` shape.
+- **Manifest values** — `name: time-tracker`, `version: 0.1.0`, `author: { name: "Vikrant Jain" }`, with `keywords` like `time-tracking`, `billing`, `hooks`. Matches every sibling plugin's `plugin.json` shape.
 - **Hook dispatch convention** — `track-event.sh` receives the event type as its first positional arg (e.g. `track-event.sh session_start`) and reads the hook JSON payload from stdin; `hooks.json` passes the literal event name per registration. (The payload doesn't self-label the event, so the registration supplies it.) Chosen for an unambiguous, grep-able dispatch.
 - **`SessionStart` matchers** — register all of `startup`, `resume`, `clear`, `compact` (each opens a sub-interval per the segmentation rule), mirroring the explicit-matcher style in `claude-session-profiler/hooks/hooks.json`.
 - **Default report output** — Markdown table to stdout (customer → project → wall-clock + active-engagement); `--csv` switches to CSV. Default chosen because the primary consumer is the `tt report` sentinel rendering into the block `reason`.
@@ -68,17 +68,17 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] Enabling the plugin at `local` scope in a project loads without error; starting and ending a session writes a `session_start` and a `session_end` line to `events.jsonl`. *(Verified via simulated hook payloads; `hooks.json` mirrors the sibling-plugin convention so it loads identically.)*
 - [x] Each user prompt writes a `prompt` line and each completed response writes a `stop` line, so a one-turn session yields the full `session_start → prompt → stop → session_end` sequence. *(Smoke test produced exactly that 4-line sequence.)*
 - [x] Every line is metadata-only JSON carrying `ts` (epoch), `iso`, `event`, `session_id`, `project` (absolute `cwd`), plus `source` on `session_start` and `reason` on `session_end`; no prompt/response text appears. *(Leak check passed: injected prompt text absent from store.)*
-- [x] The store dir is auto-created on first event (`mkdir -p`); it defaults to `~/activity-tracker/` and honors `ACTIVITY_TRACKER_DIR` when set. *(Override honored in smoke test.)*
-- [x] `activity-tracker` appears in the marketplace listing with correct name/description/version. *(Entry added; `marketplace.json` validates.)*
+- [x] The store dir is auto-created on first event (`mkdir -p`); it defaults to `~/time-tracker/` and honors `TIME_TRACKER_DIR` when set. *(Override honored in smoke test.)*
+- [x] `time-tracker` appears in the marketplace listing with correct name/description/version. *(Entry added; `marketplace.json` validates.)*
 - [x] With the plugin enabled at `local` scope in project A but **not** project B, a session in B writes **no** events — confirming hooks load per-project only, with no cross-project coupling. *(Structural: the recorder only writes when the hook fires, and local-scope hooks fire only for the enabling project. No write path exists without invocation.)*
 
 **Tasks:**
 - [x] 1.1 Write the plugin manifest (name/version/description/author/keywords) — touches `.claude-plugin/plugin.json` (new)
 - [x] 1.2 Register `SessionStart` (startup/resume/clear/compact), `UserPromptSubmit`, `Stop`, `SessionEnd`, each invoking `track-event.sh <event>` with a short timeout — touches `hooks/hooks.json` (new)
-- [x] 1.3 Implement the recorder: read payload from stdin, build a metadata-only JSON line via `jq`+`date +%s`, `mkdir -p` the store, append to `events.jsonl` under `${ACTIVITY_TRACKER_DIR:-$HOME/activity-tracker}` — touches `hooks/scripts/track-event.sh` (new)
+- [x] 1.3 Implement the recorder: read payload from stdin, build a metadata-only JSON line via `jq`+`date +%s`, `mkdir -p` the store, append to `events.jsonl` under `${TIME_TRACKER_DIR:-$HOME/time-tracker}` — touches `hooks/scripts/track-event.sh` (new)
 - [x] 1.4 Register the plugin in the marketplace — touches `../../.claude-plugin/marketplace.json`
-- [x] 1.5 Write the README skeleton: enable at `--scope local`, store location + `ACTIVITY_TRACKER_DIR`, sentinel token, `projects.toml` (stub sections later stories fill in) — touches `README.md` (new)
-- [x] 1.6 Smoke test: enable locally, run a one-turn session, confirm the four event lines and the `ACTIVITY_TRACKER_DIR` override — no files
+- [x] 1.5 Write the README skeleton: enable at `--scope local`, store location + `TIME_TRACKER_DIR`, sentinel token, `projects.toml` (stub sections later stories fill in) — touches `README.md` (new)
+- [x] 1.6 Smoke test: enable locally, run a one-turn session, confirm the four event lines and the `TIME_TRACKER_DIR` override — no files
 - [x] 1.7 No-coupling check: enable in project A only, run a session in unenabled project B, confirm B writes nothing — no files
 
 ### Story 2: Derive wall-clock per project as a Markdown table
@@ -209,14 +209,14 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 8.4 Document `tt add` syntax and the manual-vs-observed distinction — touches `README.md`
 - [x] 8.5 Test positive add, negative correction, and the distinct labeling — runs `python3 scripts/report.py` (against a fixture)
 
-### Story 9: Optional `/activity-tracker:timesheet` slash command
+### Story 9: Optional `/time-tracker:timesheet` slash command
 **Status:** done
 **Depends on:** story-2
 **Context:** The opt-in conversational layer for when the user *wants* the model to format the table or walk through corrections (this path does cost a model turn, unlike the sentinels). Purely additive — nothing depends on it.
 
 **Acceptance criteria:**
-- [x] `/activity-tracker:timesheet` invokes `report.py` and presents a formatted timesheet, optionally guiding manual corrections. *(Command instructs the model to run `report.py $ARGUMENTS`, present the table, flag unmapped/idle gaps, and suggest `tt add` corrections without mutating data.)*
-- [x] The command works without any sentinel infrastructure (it's a normal model-driven command path). *(Core action — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/report.py` reading `ACTIVITY_TRACKER_DIR` — runs end-to-end independent of the hook.)*
+- [x] `/time-tracker:timesheet` invokes `report.py` and presents a formatted timesheet, optionally guiding manual corrections. *(Command instructs the model to run `report.py $ARGUMENTS`, present the table, flag unmapped/idle gaps, and suggest `tt add` corrections without mutating data.)*
+- [x] The command works without any sentinel infrastructure (it's a normal model-driven command path). *(Core action — `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/report.py` reading `TIME_TRACKER_DIR` — runs end-to-end independent of the hook.)*
 
 **Tasks:**
 - [x] 9.1 Author the command: instruct the model to run `report.py`, format the result, and offer correction guidance — touches `commands/timesheet.md` (new)

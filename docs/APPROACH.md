@@ -1,4 +1,4 @@
-# Approach: Activity Tracker — Claude Code Time-Tracking Plugin
+# Approach: Time Tracker — Claude Code Time-Tracking Plugin
 
 **Status:** Complete
 **Last updated:** 2026-06-03
@@ -117,8 +117,8 @@ Linux so concurrent sessions don't corrupt the file.
 
 ### Data model: store location
 **Question:** Where does the event store live?
-**Decision:** A **single visible central directory**, default `~/activity-tracker/`, overridable
-via the `ACTIVITY_TRACKER_DIR` env var. Records are keyed by **absolute project path** (the
+**Decision:** A **single visible central directory**, default `~/time-tracker/`, overridable
+via the `TIME_TRACKER_DIR` env var. Records are keyed by **absolute project path** (the
 `cwd` at `SessionStart`). The tracker does **not** manage git — backup/sync is a separate,
 out-of-scope concern.
 **Rationale:** A single central store lets reporting aggregate across all of a customer's
@@ -192,7 +192,7 @@ and **no model turn occurs** (`suppressOriginalPrompt: true` hides the typed tex
   `suppressOriginalPrompt: true`.
 - Sentinel prompts are **not** recorded as activity — the same hook skips its heartbeat for them;
   non-sentinel prompts proceed normally and *are* recorded.
-- An **optional** `/activity-tracker:timesheet` slash command remains for when the user *wants* the
+- An **optional** `/time-tracker:timesheet` slash command remains for when the user *wants* the
   model to format the report or walk through corrections (that path does invoke the model).
 **Sentinel token:** a distinctive prefix (working default `tt `) chosen to be unlikely to begin a
 real prompt; documented in the README, with an escape for the rare real prompt that needs it.
@@ -207,7 +207,7 @@ report acceptably (else write the report to a file and show its path).
 **Question:** How is the report invoked and what does it emit?
 **Decision:** Two no-install paths, both calling the same `scripts/report.py`: (1) the
 **`tt report [filters]` sentinel** — the hook runs the engine and returns the output in the block
-`reason`, shown to the user with **no model turn**; (2) the **optional `/activity-tracker:timesheet`
+`reason`, shown to the user with **no model turn**; (2) the **optional `/time-tracker:timesheet`
 slash command** for when you want Claude to format the table or walk through corrections (model
 turn). The engine emits a **Markdown table by default** (customer → project → wall-clock +
 active-engagement), with `--csv` export and filters for date range (`--from`/`--to` or `--month`)
@@ -241,19 +241,19 @@ number while active-engagement stays the correction overlay.
 **Question:** What is the on-disk structure of the plugin?
 **Decision:**
 ```
-activity-tracker/
+time-tracker/
 ├── .claude-plugin/plugin.json     # manifest (name, version, description, author)
 ├── hooks/
 │   ├── hooks.json                 # registers SessionStart/UserPromptSubmit/Stop/SessionEnd
 │   └── scripts/track-event.sh     # heartbeat recorder + sentinel interpreter (pause/resume/add/report)
 ├── scripts/report.py              # report engine (called by the hook and the optional command)
 ├── commands/
-│   └── timesheet.md               # OPTIONAL /activity-tracker:timesheet (model) — formatted report
+│   └── timesheet.md               # OPTIONAL /time-tracker:timesheet (model) — formatted report
 └── README.md                      # setup: enable at --scope local; sentinel token; projects.toml
 ```
 **No `bin/`, no launcher, no `pause.md`/`resume.md`/`add-time.md`** — pause/resume/add/report are
 **typed sentinels** handled by the `UserPromptSubmit` hook (no install, no model). The **store**
-(`$ACTIVITY_TRACKER_DIR`, default visible `~/activity-tracker/`) holds `events.jsonl`,
+(`$TIME_TRACKER_DIR`, default visible `~/time-tracker/`) holds `events.jsonl`,
 `manual.jsonl`, and the hand-edited `projects.toml` — kept **out of** the plugin dir. Plus
 registration in the marketplace `.claude-plugin/marketplace.json` (root of `my-claude-plugins`).
 **Rationale:** Matches marketplace convention (`hooks/hooks.json`, `hooks/scripts/*.sh` as in
@@ -268,7 +268,7 @@ ephemeral** cache path, `~/.claude/plugins/cache/<marketplace>/<plugin>/<version
 updates… do not write state here."* `${CLAUDE_PLUGIN_DATA}` (`~/.claude/plugins/data/<id>/`) survives
 updates but is **deleted on uninstall**. (<https://code.claude.com/docs/en/plugins-reference>,
 environment variables / persistent data dir, fetched 2026-06-03.)
-**Decision:** Billing data lives in the visible `~/activity-tracker/` (per the store-location
+**Decision:** Billing data lives in the visible `~/time-tracker/` (per the store-location
 decision) — **not** in the plugin's code dir (wiped on update) and **not** in `${CLAUDE_PLUGIN_DATA}`
 (wiped on uninstall). This is a deliberate split: *code* stays inside the plugin; *billing records*
 must outlive any plugin version or uninstall, so they sit in a stable user dir. Writing data files
@@ -285,7 +285,7 @@ sentinel-hook design (no launcher, no PATH/alias changes); only data sits outsid
 
 **Decision:** **Per-project opt-in.** This is not a constraint the plugin imposes — it uses
 Claude Code's standard enablement, which works at `user`, `project`, or `local` scope. The user's
-**preference is `local` scope**: enable `activity-tracker` in each customer project's
+**preference is `local` scope**: enable `time-tracker` in each customer project's
 `.claude/settings.local.json` (and any personal project they want productivity data on). Hooks
 then fire only for sessions in those projects.
 **Scope behavior (verified):** the enablement scope decides which settings file holds the
@@ -318,7 +318,7 @@ degrades gracefully before any mapping is configured.
 project before the plugin was enabled?
 **Decision:** Adding time is a **`tt add …` sentinel** (no model; caught by the `UserPromptSubmit`
 hook — see command delivery) that writes to a **separate `manual.jsonl` ledger**, kept distinct
-from the observed `events.jsonl`; an optional `/activity-tracker:add-time` slash command remains for
+from the observed `events.jsonl`; an optional `/time-tracker:add-time` slash command remains for
 natural-language entry (Claude resolving the project/date for you, model turn). Each entry records
 `project` (an absolute path, or a customer/project label from `projects.toml`), `date` (local),
 `duration`, a free-text `note`, and `source: manual`. The report **merges** manual entries into the per-project

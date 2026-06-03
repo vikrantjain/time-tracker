@@ -4,9 +4,9 @@ description: "Produce a formatted timesheet from tracked Claude Code activity an
 argument-hint: "[optional filters, e.g. --month 2026-05 --customer \"Acme Corp\"]"
 ---
 
-# Activity Tracker — Timesheet
+# Time Tracker — Timesheet
 
-Produce a per-customer / per-project timesheet from the Activity Tracker store, then offer to help with corrections.
+Produce a per-customer / per-project timesheet from the Time Tracker store, then offer to help with corrections.
 
 This is the **optional, model-driven** path. For a fast, zero-cost report that never invokes the model, the user can instead type the sentinel `tt report [filters]` directly. Use this command when the user wants you to *format*, *explain*, or *help correct* the timesheet conversationally.
 
@@ -22,7 +22,7 @@ Any arguments are passed straight through as report filters: $ARGUMENTS
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" $ARGUMENTS
    ```
 
-   The engine reads the store at `$ACTIVITY_TRACKER_DIR` (default `~/activity-tracker/`); do not pass `--dir` unless the user specifies a different location.
+   The engine reads the store at `$TIME_TRACKER_DIR` (default `~/time-tracker/`); do not pass `--dir` unless the user specifies a different location.
 
 2. If the output is `No activity recorded.`, tell the user there's nothing tracked for that filter and suggest checking the date range / customer name, or that the plugin may not have been enabled in the relevant project. Then stop.
 

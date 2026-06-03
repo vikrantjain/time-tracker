@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Activity Tracker — report engine.
+"""Time Tracker — report engine.
 
 Reads the append-only event log produced by the capture hook and derives
 wall-clock time per project. Stdlib only (no third-party dependencies).
 
-Store location: ${ACTIVITY_TRACKER_DIR:-$HOME/activity-tracker}
+Store location: ${TIME_TRACKER_DIR:-$HOME/time-tracker}
   events.jsonl   observed session events (this story)
 
 Core model
@@ -57,8 +57,8 @@ def parse_duration(text, bare_unit_seconds=60):
 def store_dir(override=None):
     if override:
         return override
-    return os.environ.get("ACTIVITY_TRACKER_DIR") or os.path.join(
-        os.path.expanduser("~"), "activity-tracker"
+    return os.environ.get("TIME_TRACKER_DIR") or os.path.join(
+        os.path.expanduser("~"), "time-tracker"
     )
 
 
@@ -562,10 +562,10 @@ def build_report(
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Activity Tracker report engine.")
+    parser = argparse.ArgumentParser(description="Time Tracker report engine.")
     parser.add_argument(
         "--dir",
-        help="Store directory (default: $ACTIVITY_TRACKER_DIR or ~/activity-tracker).",
+        help="Store directory (default: $TIME_TRACKER_DIR or ~/time-tracker).",
     )
     parser.add_argument(
         "--idle-threshold",
