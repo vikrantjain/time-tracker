@@ -34,6 +34,13 @@
         ]
       }
     ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/track-expansion.sh", "timeout": 15 }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

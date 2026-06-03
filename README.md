@@ -88,14 +88,19 @@ python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 
 Both call the same `report.py` engine and accept the same filters.
 
-## Sentinel commands (no model turn)
+## tt commands (no model turn)
 
-Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model — no model turn, no token cost, and the prompt is **not** recorded as activity:
+These bookkeeping commands run entirely in-plugin and never reach the model — no model turn, no token cost, and they are **not** recorded as activity. There are two equivalent ways to invoke them:
+
+- **Typed sentinel** — a prompt beginning with **`tt `** (e.g. `tt pause`), intercepted on `UserPromptSubmit`. Terse; nothing to discover in the `/` palette.
+- **Slash command** — **`/time-tracker:tt <cmd>`** (e.g. `/time-tracker:tt pause`), intercepted on `UserPromptExpansion`. Discoverable via `/`; running `/time-tracker:tt` with no argument prints the help.
+
+Both forms share one dispatcher (`scripts/tt-dispatch.sh`), so behavior is identical. The verbs:
 
 - `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
 - `tt pause` / `tt resume` — exclude a deliberate idle span (e.g. lunch) from a session you leave open. `tt pause` drops the clock; it auto-resumes on your next normal prompt, or sooner if you type `tt resume` (useful when you're back and reading before typing). The paused span is removed from **both** wall-clock and active-engagement. Markers are appended to the log (the log is never mutated) — they are not counted as activity.
 - `tt add <duration> <project-or-customer> "<note>"` — record billable time the hooks can't see (work outside Claude Code, or before the plugin was enabled). `<duration>` accepts `2h`, `90m`, or a bare number (= hours); a **negative** duration (`-30m`) records a correction. The target may be a project path or a customer name. Manual time is written to a separate `manual.jsonl` and appears in the report as a distinct `✎ manual` line under its customer — added to **wall-clock** but **excluded from active-engagement** (which is observed-only). A negative entry shows as its own adjustment, never netted into observed hours. Example: `tt add 2h "Acme Corp" "phone consult"`.
-- `tt help` (or a bare `tt`) — print this list of sentinel commands and the `/time-tracker:timesheet` slash command. Static text only; nothing is logged.
+- `tt help` (or a bare `tt`, or `/time-tracker:tt` with no argument) — print this list of commands. Static text only; nothing is logged.
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 
