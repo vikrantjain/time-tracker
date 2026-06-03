@@ -1,0 +1,6 @@
+# Local, per-machine plugin enablement — never commit (gitignored by convention)
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc

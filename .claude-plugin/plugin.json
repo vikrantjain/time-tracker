@@ -1,0 +1,9 @@
+{
+  "name": "activity-tracker",
+  "version": "0.1.0",
+  "description": "Track wall-clock time spent working with Claude Code per project, for per-customer billing and productivity analysis. Passive hook-based capture; on-demand reports and corrections via typed sentinel commands that cost no model turn.",
+  "author": {
+    "name": "Vikrant Jain"
+  },
+  "keywords": ["time-tracking", "billing", "productivity", "hooks", "timesheet"]
+}
