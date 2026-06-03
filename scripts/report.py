@@ -24,11 +24,13 @@ gets its portion). Per-project total = sum across the days in range.
 """
 
 import argparse
+import csv
+import io
 import json
 import os
 import sys
 import tomllib
-from datetime import datetime, timedelta, time
+from datetime import date, datetime, timedelta, time
 
 HEARTBEAT_EVENTS = {"session_start", "prompt", "stop"}
 DEFAULT_IDLE_THRESHOLD_SECONDS = 15 * 60  # 15 minutes
@@ -255,7 +257,72 @@ def fmt_hours(seconds):
     return f"{seconds / 3600:.2f}"
 
 
+# --------------------------------------------------------------------------- #
+# Filtering                                                                   #
+# --------------------------------------------------------------------------- #
+def parse_date(text):
+    """Parse a YYYY-MM-DD string into a date."""
+    return datetime.strptime(text, "%Y-%m-%d").date()
+
+
+def month_range(text):
+    """Return (first_day, last_day) for a YYYY-MM string."""
+    year, month = (int(x) for x in text.split("-"))
+    first = date(year, month, 1)
+    if month == 12:
+        last = date(year, 12, 31)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    return first, last
+
+
+def filter_by_date(project_day, dfrom, dto):
+    """Keep only day buckets within [dfrom, dto] (inclusive); drop empty projects."""
+    if dfrom is None and dto is None:
+        return project_day
+    out = {}
+    for project, days in project_day.items():
+        kept = {
+            d: s
+            for d, s in days.items()
+            if (dfrom is None or d >= dfrom) and (dto is None or d <= dto)
+        }
+        if kept:
+            out[project] = kept
+    return out
+
+
+def filter_by_customer(project_day, projects, customer):
+    """Keep only projects mapped to the given customer."""
+    return {
+        project: days
+        for project, days in project_day.items()
+        if projects.get(project, {}).get("customer") == customer
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Rendering                                                                   #
+# --------------------------------------------------------------------------- #
 UNMAPPED_LABEL = "⚠ unmapped"
+
+
+def render_csv(wc_by_project_day, eng_by_project_day, projects=None):
+    projects = projects or {}
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["customer", "project", "wall_clock_hours", "active_engagement_hours"])
+    rows = []
+    for project in wc_by_project_day:
+        mapping = projects.get(project, {})
+        customer = mapping.get("customer") or "unmapped"
+        display = mapping.get("name") or project or "(unknown)"
+        wc = sum(wc_by_project_day[project].values())
+        eng = sum(eng_by_project_day.get(project, {}).values())
+        rows.append((customer, display, fmt_hours(wc), fmt_hours(eng)))
+    for row in sorted(rows):
+        writer.writerow(row)
+    return buf.getvalue().rstrip("\n")
 
 
 def render_markdown(wc_by_project_day, eng_by_project_day, projects=None):
@@ -309,6 +376,10 @@ def build_report(
     events_path,
     idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS,
     projects_path=None,
+    date_from=None,
+    date_to=None,
+    customer=None,
+    as_csv=False,
 ):
     events = load_events(events_path)
     if not events:
@@ -317,6 +388,17 @@ def build_report(
     wc = wall_clock_by_project_day(intervals)
     eng = engagement_by_project_day(intervals, idle_threshold)
     projects = load_projects(projects_path) if projects_path else {}
+
+    wc = filter_by_date(wc, date_from, date_to)
+    eng = filter_by_date(eng, date_from, date_to)
+    if customer is not None:
+        wc = filter_by_customer(wc, projects, customer)
+        eng = filter_by_customer(eng, projects, customer)
+
+    if not wc:
+        return "No activity recorded."
+    if as_csv:
+        return render_csv(wc, eng, projects)
     return render_markdown(wc, eng, projects)
 
 
@@ -332,13 +414,40 @@ def main(argv=None):
         help="Idle gap above which time is excluded from active-engagement "
         "(bare number = minutes; suffix s/m/h). Default 15m.",
     )
+    parser.add_argument("--from", dest="date_from", help="Start date (YYYY-MM-DD), inclusive.")
+    parser.add_argument("--to", dest="date_to", help="End date (YYYY-MM-DD), inclusive.")
+    parser.add_argument("--month", help="Whole-month shorthand (YYYY-MM) for --from/--to.")
+    parser.add_argument("--customer", help="Restrict the report to one customer.")
+    parser.add_argument("--csv", action="store_true", help="Emit CSV instead of a Markdown table.")
     args = parser.parse_args(argv)
+
+    if args.month and (args.date_from or args.date_to):
+        parser.error("--month cannot be combined with --from/--to")
+
+    date_from = date_to = None
+    if args.month:
+        date_from, date_to = month_range(args.month)
+    else:
+        if args.date_from:
+            date_from = parse_date(args.date_from)
+        if args.date_to:
+            date_to = parse_date(args.date_to)
 
     sdir = store_dir(args.dir)
     events_path = os.path.join(sdir, "events.jsonl")
     projects_path = os.path.join(sdir, "projects.toml")
     idle = parse_duration(args.idle_threshold)
-    print(build_report(events_path, idle_threshold=idle, projects_path=projects_path))
+    print(
+        build_report(
+            events_path,
+            idle_threshold=idle,
+            projects_path=projects_path,
+            date_from=date_from,
+            date_to=date_to,
+            customer=args.customer,
+            as_csv=args.csv,
+        )
+    )
     return 0
 
 

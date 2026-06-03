@@ -137,22 +137,22 @@ This plan is self-tracking — checkboxes are the source of truth, `Status` is d
 - [x] 4.5 Test mapped rollup, unmapped flagging, and missing-config paths — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 5: Add billing-period filters and CSV export
-**Status:** todo
+**Status:** done
 **Depends on:** story-2, story-4
 **Context:** The query/export surface that matches an actual billing-period workflow. Date filtering operates on the event stream (needs only the core engine); `--customer` and CSV's per-customer rows need the mapping from story-4. Engagement (story-3) is orthogonal — if its column exists at build time it's filtered/exported like any other, but it is not a prerequisite.
 
 **Acceptance criteria:**
-- [ ] `--from`/`--to` restrict the report to a local-day date range; `--month <YYYY-MM>` is an equivalent convenience for a whole month.
-- [ ] `--customer <name>` narrows the report to one customer's projects.
-- [ ] `--csv` emits the same data as parseable CSV (one row per customer/project) instead of the Markdown table.
-- [ ] Filters and `--csv` compose (e.g. `--month` + `--customer` + `--csv` produces that customer's month as CSV).
+- [x] `--from`/`--to` restrict the report to a local-day date range; `--month <YYYY-MM>` is an equivalent convenience for a whole month. *(`filter_by_date` on day buckets; `month_range`; `test_from_to_restricts_range`, `test_month_range`.)*
+- [x] `--customer <name>` narrows the report to one customer's projects. *(`filter_by_customer`; `test_customer_filter`.)*
+- [x] `--csv` emits the same data as parseable CSV (one row per customer/project) instead of the Markdown table. *(`render_csv`; `test_csv_parseable` round-trips via `csv.reader`.)*
+- [x] Filters and `--csv` compose (e.g. `--month` + `--customer` + `--csv` produces that customer's month as CSV). *(`test_filters_compose_month_customer_csv` + CLI run; empty result degrades to "No activity recorded." via `test_filter_excludes_all_yields_no_activity`.)*
 
 **Tasks:**
-- [ ] 5.1 Add `--from`/`--to` date-range filtering on local-day buckets — touches `scripts/report.py`
-- [ ] 5.2 Add `--month` as a from/to shorthand — touches `scripts/report.py`
-- [ ] 5.3 Add `--customer` filtering — touches `scripts/report.py`
-- [ ] 5.4 Add `--csv` output mode — touches `scripts/report.py`
-- [ ] 5.5 Test filter composition and CSV parseability — runs `python3 scripts/report.py` (against a fixture)
+- [x] 5.1 Add `--from`/`--to` date-range filtering on local-day buckets — touches `scripts/report.py`
+- [x] 5.2 Add `--month` as a from/to shorthand — touches `scripts/report.py`
+- [x] 5.3 Add `--customer` filtering — touches `scripts/report.py`
+- [x] 5.4 Add `--csv` output mode — touches `scripts/report.py`
+- [x] 5.5 Test filter composition and CSV parseability — runs `python3 scripts/report.py` (against a fixture)
 
 ### Story 6: Intercept the `tt report` sentinel with a no-model block
 **Status:** todo

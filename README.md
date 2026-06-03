@@ -60,6 +60,27 @@ customer = "Beta LLC"
 
 The file is read-only to the tool (you hand-edit it). A project that appears in the log but is **not** in `projects.toml` is shown flagged as `⚠ unmapped` — never silently dropped — so you always notice unbilled work. A missing `projects.toml` simply means every project is unmapped.
 
+## Reporting
+
+`scripts/report.py` (also reachable via the `tt report` sentinel) accepts:
+
+| Flag | Effect |
+| --- | --- |
+| `--month YYYY-MM` | Restrict to a whole calendar month (local days). |
+| `--from YYYY-MM-DD` / `--to YYYY-MM-DD` | Restrict to an explicit inclusive date range. |
+| `--customer "<name>"` | Restrict to one customer's projects. |
+| `--idle-threshold <dur>` | Idle gap above which time is dropped from active-engagement (e.g. `30m`, `900s`, `1h`; bare number = minutes). |
+| `--csv` | Emit CSV (one row per customer/project) instead of the Markdown table. |
+| `--dir <path>` | Override the store directory (defaults to `$ACTIVITY_TRACKER_DIR` or `~/activity-tracker`). |
+
+Filters compose, e.g. a customer's invoice for one month as CSV:
+
+```
+python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
+```
+
+(`--month` cannot be combined with `--from`/`--to`.)
+
 ## Sentinel commands (no model turn)
 
 Typed prompts beginning with the sentinel token **`tt `** are intercepted by the plugin, executed locally, and never reach the model:

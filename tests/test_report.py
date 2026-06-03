@@ -264,6 +264,106 @@ class CustomerMapping(unittest.TestCase):
             os.remove(path)
 
 
+class FiltersAndCsv(unittest.TestCase):
+    def _multi_day_multi_customer(self):
+        # acme on 2026-03-02 (1h) and 2026-03-10 (2h); beta on 2026-03-02 (1h).
+        return [
+            ev("session_start", "a1", ts(2026, 3, 2, 10, 0), project="/p/acme"),
+            ev("session_end", "a1", ts(2026, 3, 2, 11, 0), project="/p/acme"),
+            ev("session_start", "a2", ts(2026, 3, 10, 9, 0), project="/p/acme"),
+            ev("session_end", "a2", ts(2026, 3, 10, 11, 0), project="/p/acme"),
+            ev("session_start", "b1", ts(2026, 3, 2, 14, 0), project="/p/beta"),
+            ev("session_end", "b1", ts(2026, 3, 2, 15, 0), project="/p/beta"),
+        ]
+
+    def _projects(self):
+        toml = (
+            '["/p/acme"]\ncustomer = "Acme Corp"\n'
+            '["/p/beta"]\ncustomer = "Beta LLC"\n'
+        )
+        path = write_projects_toml(toml)
+        try:
+            return report.load_projects(path)
+        finally:
+            os.remove(path)
+
+    def test_month_range(self):
+        f, t = report.month_range("2026-02")
+        self.assertEqual((f, t), (datetime(2026, 2, 1).date(), datetime(2026, 2, 28).date()))
+        f, t = report.month_range("2026-12")
+        self.assertEqual((f, t), (datetime(2026, 12, 1).date(), datetime(2026, 12, 31).date()))
+
+    def test_from_to_restricts_range(self):
+        wc = report.wall_clock_by_project_day(
+            report.build_intervals(self._multi_day_multi_customer())
+        )
+        only_2nd = report.filter_by_date(
+            wc, datetime(2026, 3, 2).date(), datetime(2026, 3, 2).date()
+        )
+        secs = {p: round(sum(d.values())) for p, d in only_2nd.items()}
+        # acme 1h + beta 1h on the 2nd; acme's 2h on the 10th excluded.
+        self.assertEqual(secs, {"/p/acme": 3600, "/p/beta": 3600})
+
+    def test_customer_filter(self):
+        ivs = report.build_intervals(self._multi_day_multi_customer())
+        wc = report.wall_clock_by_project_day(ivs)
+        projects = self._projects()
+        acme_only = report.filter_by_customer(wc, projects, "Acme Corp")
+        self.assertEqual(set(acme_only), {"/p/acme"})
+
+    def test_csv_parseable(self):
+        ivs = report.build_intervals(self._multi_day_multi_customer())
+        wc = report.wall_clock_by_project_day(ivs)
+        eng = report.engagement_by_project_day(ivs, 15 * 60)
+        out = report.render_csv(wc, eng, self._projects())
+        import csv as _csv
+
+        reader = list(_csv.reader(out.splitlines()))
+        self.assertEqual(reader[0], ["customer", "project", "wall_clock_hours", "active_engagement_hours"])
+        body = reader[1:]
+        self.assertEqual(len(body), 2)  # one row per project
+        acme = next(r for r in body if r[1] == "/p/acme")
+        self.assertEqual(acme[0], "Acme Corp")
+        self.assertEqual(acme[2], "3.00")  # 1h + 2h across both days
+
+    def test_filters_compose_month_customer_csv(self):
+        path = write_log(self._multi_day_multi_customer())
+        toml_path = write_projects_toml(
+            '["/p/acme"]\ncustomer = "Acme Corp"\n["/p/beta"]\ncustomer = "Beta LLC"\n'
+        )
+        try:
+            f, t = report.month_range("2026-03")
+            out = report.build_report(
+                path,
+                projects_path=toml_path,
+                date_from=f,
+                date_to=t,
+                customer="Acme Corp",
+                as_csv=True,
+            )
+        finally:
+            os.remove(path)
+            os.remove(toml_path)
+        import csv as _csv
+
+        rows = list(_csv.reader(out.splitlines()))[1:]
+        self.assertEqual(len(rows), 1)             # only Acme
+        self.assertEqual(rows[0][0], "Acme Corp")
+        self.assertEqual(rows[0][2], "3.00")       # whole-month acme total
+
+    def test_filter_excludes_all_yields_no_activity(self):
+        path = write_log(self._multi_day_multi_customer())
+        try:
+            out = report.build_report(
+                path,
+                date_from=datetime(2025, 1, 1).date(),
+                date_to=datetime(2025, 1, 31).date(),
+            )
+        finally:
+            os.remove(path)
+        self.assertEqual(out, "No activity recorded.")
+
+
 class EndToEnd(unittest.TestCase):
     def test_missing_log(self):
         self.assertEqual(report.build_report("/nonexistent/path.jsonl"),
