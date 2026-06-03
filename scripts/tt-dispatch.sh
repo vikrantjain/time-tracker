@@ -61,16 +61,51 @@ case "$action" in
     emit_block "$out"
     ;;
   add)
-    # add <duration> <project-or-customer> "<note>"
-    # Tokenized honoring quotes; duration kept as a string for the engine to
-    # parse (bare number = hours; suffix s/m/h; negative = correction).
+    # add <duration> [--to <project-or-customer>] [note...]
+    #   duration : bare number = hours; suffix s/m/h; negative = correction.
+    #   --to     : explicit target (project path or customer name). When
+    #              omitted, the time is attributed to the CURRENT project (the
+    #              cwd the command was invoked from), exactly like a session.
+    #   note     : everything else (quoting optional); joined with spaces.
+    # Tokenized honoring quotes WITHOUT invoking a shell.
     mapfile -t aargs < <(printf '%s' "$rest" | xargs -r -n1 printf '%s\n' 2>/dev/null || true)
     dur="${aargs[0]:-}"
-    target="${aargs[1]:-}"
-    note="${aargs[2]:-}"
-    if [ -z "$dur" ] || [ -z "$target" ]; then
-      emit_block "Usage: tt add <duration> <project-or-customer> \"<note>\"  (e.g. tt add 2h \"Acme Corp\" \"phone call\")"
+    if [ -z "$dur" ]; then
+      emit_block "Usage: tt add <duration> [--to <project-or-customer>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" kickoff call)"
     fi
+
+    # Split the remaining args into an optional --to <value> and the note words.
+    target=""
+    target_explicit=0
+    pos=()
+    i=1
+    n=${#aargs[@]}
+    while [ "$i" -lt "$n" ]; do
+      if [ "${aargs[$i]}" = "--to" ]; then
+        target="${aargs[$((i+1))]:-}"
+        target_explicit=1
+        i=$((i + 2))
+      else
+        pos+=("${aargs[$i]}")
+        i=$((i + 1))
+      fi
+    done
+    note="${pos[*]}"
+
+    defaulted=0
+    if [ "$target_explicit" -eq 1 ]; then
+      if [ -z "$target" ]; then
+        emit_block "tt add: --to needs a value (a project path or customer name)."
+      fi
+    else
+      # Default to the current project (cwd), mapped to a customer at report time.
+      target="${TT_PROJECT:-}"
+      defaulted=1
+      if [ -z "$target" ]; then
+        emit_block "tt add: no current project to attribute to — pass --to <project-or-customer>  (e.g. tt add 2h --to \"Acme Corp\" \"call\")."
+      fi
+    fi
+
     manual_file="${store_dir}/manual.jsonl"
     jq -n -c \
       --argjson ts "${now_ts:-0}" \
@@ -81,7 +116,9 @@ case "$action" in
       --arg note "$note" \
       '{ts: $ts, iso: $iso, source: "manual", project: $project, date: $date, duration: $duration, note: $note}' \
       >> "$manual_file" 2>/dev/null || true
-    emit_block "✎ Recorded ${dur} to '${target}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+    where="$target"
+    [ "$defaulted" -eq 1 ] && where="$target (current project)"
+    emit_block "✎ Recorded ${dur} to '${where}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
     ;;
   pause)
     # Record a pause MARKER (not a heartbeat). The engine treats the span until
@@ -101,7 +138,7 @@ case "$action" in
       "Use either form:   tt <cmd>      or      /time-tracker:tt <cmd>" \
       "" \
       "  report [filters]              Wall-clock + active-engagement per project/customer" \
-      "  add <dur> <target> \"<note>\"   Record out-of-session time (e.g. tt add 2h \"Acme\" \"call\")" \
+      "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
       "  pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \
       "  help                          Show this help" \

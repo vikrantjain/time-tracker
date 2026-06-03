@@ -30,11 +30,11 @@ Any arguments are passed straight through as report filters: $ARGUMENTS
 
 4. Flag anything that needs attention:
    - Projects shown as `⚠ unmapped` — these have no customer in `projects.toml`. Offer to help the user add the mapping (point them at the `projects.toml` format in the README; you may edit it if they ask).
-   - Large wall-clock vs. small active-engagement gaps — may indicate sessions left open; the user can trim these with `tt pause`/`tt resume` next time, or correct historically with `tt add -<duration> ...`.
+   - Large wall-clock vs. small active-engagement gaps — may indicate sessions left open; the user can trim these with `tt pause`/`tt resume` next time, or correct historically with `tt add -<duration> --to <project-or-customer> ...`.
 
 5. Offer correction guidance, but do **not** silently change data. Manual adjustments are the user's call:
-   - To add untracked time: `tt add <duration> <project-or-customer> "<note>"`.
-   - To deduct over-counted time: `tt add -<duration> <project-or-customer> "<note>"`.
-   Explain that these are typed sentinels the user enters themselves (they cost no model turn) — you can suggest the exact command, but the user runs it.
+   - To add untracked time to the current project: `tt add <duration> [note]`; to another target: `tt add <duration> --to <project-or-customer> [note]`.
+   - To deduct over-counted time: `tt add -<duration> --to <project-or-customer> [note]`.
+   Explain that these are typed commands the user enters themselves (they cost no model turn) — you can suggest the exact command, but the user runs it.
 
 Keep the response concise: the table first, then a short bullet list of anything flagged, then the suggested corrections (if any).
