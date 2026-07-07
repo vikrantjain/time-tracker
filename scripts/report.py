@@ -478,6 +478,8 @@ def period_label(date_from, date_to):
     if date_from is None and date_to is None:
         return "all time"
     if date_from and date_to:
+        if date_from == date_to:
+            return str(date_from)
         if month_range(f"{date_from.year:04d}-{date_from.month:02d}") == (date_from, date_to):
             return f"{date_from.year:04d}-{date_from.month:02d}"
         return f"{date_from} to {date_to}"

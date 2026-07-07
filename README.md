@@ -116,6 +116,21 @@ Both forms share one dispatcher (`scripts/tt-dispatch.sh`), so behavior is ident
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 
+## Statusline (optional)
+
+To see today's tracked time passively instead of asking, wire the bundled segment into Claude Code's statusline in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash /path/to/plugins/time-tracker/scripts/statusline.sh"
+  }
+}
+```
+
+It prints `⏱ 3h 12m today` (or `⏸ paused until 13:05 · 2h 41m today` while paused) using the same engine as `tt status --brief`. Point the command at the installed plugin path — `statusLine` settings can't use `${CLAUDE_PLUGIN_ROOT}`. It honors `TIME_TRACKER_DIR`, always exits 0, and always prints something, so it can't blank your statusline. To combine it with an existing statusline command, append it to your script and join the outputs however you like.
+
 ## Status
 
-Feature-complete: passive capture (with heartbeat throttling and monthly log rotation), wall-clock + active-engagement reporting, customer mapping, billing-period filters, CSV export, pause/resume, manual time entry, and the model-free `tt` command set. Tests live in `tests/` (report engine, dispatcher, and capture hook).
+Feature-complete: passive capture (with heartbeat throttling and monthly log rotation), wall-clock + active-engagement reporting (period shorthands, humanized tables, CSV/file export), `tt status`, customer mapping via `tt map`, pause/resume with timed pauses, manual time entry with backfill and undo, an optional statusline segment, and the model-free `tt` command set with typo suggestions. Tests live in `tests/` (report engine, dispatcher, and capture hook).

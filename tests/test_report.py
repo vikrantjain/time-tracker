@@ -853,6 +853,7 @@ class RenderingUX(unittest.TestCase):
         self.assertEqual(
             report.period_label(d(2026, 3, 5), d(2026, 4, 20)), "2026-03-05 to 2026-04-20"
         )
+        self.assertEqual(report.period_label(d(2026, 3, 5), d(2026, 3, 5)), "2026-03-05")
         self.assertEqual(report.period_label(d(2026, 3, 5), None), "from 2026-03-05")
         self.assertEqual(report.period_label(None, d(2026, 4, 20)), "through 2026-04-20")
 

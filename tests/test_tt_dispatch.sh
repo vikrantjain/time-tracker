@@ -275,5 +275,16 @@ out="$(bash "$dispatch" "report --csv --out $dest" | jq -r '.reason')"
 contains "out confirms write" "Wrote CSV report" "$out"
 check "out file exists" "customer,project,wall_clock_hours,active_engagement_hours" "$(head -1 "$dest" | tr -d '\r')"
 
+# 30. Statusline segment prints a brief line from the hook JSON payload.
+new_store
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+printf '{"ts":%s,"event":"session_start","session_id":"sl1","project":"/proj/demo"}\n' \
+  "$(( $(date +%s) - 600 ))" >> "$month_file"
+out="$(printf '{"session_id":"sl1","workspace":{"current_dir":"/proj/demo"}}' \
+  | bash "$root/scripts/statusline.sh")"
+contains "statusline shows today" "today" "$out"
+out="$(printf '{}' | TIME_TRACKER_DIR="$(mktemp -d)" bash "$root/scripts/statusline.sh")"
+contains "statusline never blank" "⏱" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
