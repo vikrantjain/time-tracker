@@ -394,6 +394,21 @@ def fmt_hours(seconds):
     return f"{seconds / 3600:.2f}"
 
 
+def fmt_hm(seconds):
+    """Humanize seconds as '2h 45m' / '2h' / '45m', rounded to the minute.
+
+    Negative values (manual corrections) keep their sign: '-30m'.
+    """
+    sign = "-" if seconds < 0 else ""
+    mins = round(abs(seconds) / 60)
+    h, m = divmod(mins, 60)
+    if h and m:
+        return f"{sign}{h}h {m}m"
+    if h:
+        return f"{sign}{h}h"
+    return f"{sign}{m}m"
+
+
 # --------------------------------------------------------------------------- #
 # Filtering                                                                   #
 # --------------------------------------------------------------------------- #
@@ -411,6 +426,34 @@ def month_range(text):
     else:
         last = date(year, month + 1, 1) - timedelta(days=1)
     return first, last
+
+
+def period_label(date_from, date_to):
+    """Human label for a date filter; collapses an exact calendar month."""
+    if date_from is None and date_to is None:
+        return "all time"
+    if date_from and date_to:
+        if month_range(f"{date_from.year:04d}-{date_from.month:02d}") == (date_from, date_to):
+            return f"{date_from.year:04d}-{date_from.month:02d}"
+        return f"{date_from} to {date_to}"
+    if date_from:
+        return f"from {date_from}"
+    return f"through {date_to}"
+
+
+def data_span(sdir):
+    """(first_day, last_day) covered by observed events in the whole store.
+
+    Used to explain an empty filtered report. Returns None for an empty store.
+    """
+    events = load_events(discover_event_files(sdir))
+    if not events:
+        return None
+    tss = [e["ts"] for e in events]
+    return (
+        datetime.fromtimestamp(min(tss)).date(),
+        datetime.fromtimestamp(max(tss)).date(),
+    )
 
 
 def filter_by_date(project_day, dfrom, dto):
@@ -540,14 +583,19 @@ def render_csv(wc_by_project_day, eng_by_project_day, projects=None, manual_rows
     return buf.getvalue().rstrip("\n")
 
 
-def render_markdown(wc_by_project_day, eng_by_project_day, projects=None, manual_rows=None):
+def render_markdown(
+    wc_by_project_day, eng_by_project_day, projects=None, manual_rows=None, title=None
+):
     if not wc_by_project_day and not manual_rows:
         return "No activity recorded."
     projects = projects or {}
     groups = _build_groups(wc_by_project_day, eng_by_project_day, projects, manual_rows)
 
-    lines = [
-        "| Customer | Project | Wall-clock (h) | Active-engagement (h) |",
+    lines = []
+    if title:
+        lines += [title, ""]
+    lines += [
+        "| Customer | Project | Wall-clock | Active-engagement |",
         "| --- | --- | ---: | ---: |",
     ]
     total_wc = 0.0
@@ -557,18 +605,21 @@ def render_markdown(wc_by_project_day, eng_by_project_day, projects=None, manual
         sub_wc = 0.0
         sub_eng = 0.0
         for row in items:
-            eng_cell = "—" if row["eng"] is None else fmt_hours(row["eng"])
-            lines.append(f"| {label} | {row['display']} | {fmt_hours(row['wc'])} | {eng_cell} |")
+            eng_cell = "—" if row["eng"] is None else fmt_hm(row["eng"])
+            lines.append(f"| {label} | {row['display']} | {fmt_hm(row['wc'])} | {eng_cell} |")
             sub_wc += row["wc"]
             if row["eng"] is not None:
                 sub_eng += row["eng"]
         if len(items) > 1:
             lines.append(
-                f"| {label} | _subtotal_ | **{fmt_hours(sub_wc)}** | **{fmt_hours(sub_eng)}** |"
+                f"| {label} | _subtotal_ | **{fmt_hm(sub_wc)}** | **{fmt_hm(sub_eng)}** |"
             )
         total_wc += sub_wc
         total_eng += sub_eng
-    lines.append(f"| **Total** |  | **{fmt_hours(total_wc)}** | **{fmt_hours(total_eng)}** |")
+    # Total wall-clock also shows decimal hours — the number an invoice wants.
+    lines.append(
+        f"| **Total** |  | **{fmt_hm(total_wc)}** ({fmt_hours(total_wc)}h) | **{fmt_hm(total_eng)}** |"
+    )
     return "\n".join(lines)
 
 
@@ -608,7 +659,11 @@ def build_report(
         return "No activity recorded."
     if as_csv:
         return render_csv(wc, eng, projects, manual_rows)
-    return render_markdown(wc, eng, projects, manual_rows)
+    title = f"Time report — {period_label(date_from, date_to)}"
+    if customer is not None:
+        title += f" · customer: {customer}"
+    title += f" · idle threshold {fmt_hm(idle_threshold)}"
+    return render_markdown(wc, eng, projects, manual_rows, title=title)
 
 
 def main(argv=None):
@@ -647,18 +702,24 @@ def main(argv=None):
     projects_path = os.path.join(sdir, "projects.toml")
     manual_path = os.path.join(sdir, "manual.jsonl")
     idle = parse_duration(args.idle_threshold)
-    print(
-        build_report(
-            events_paths,
-            idle_threshold=idle,
-            projects_path=projects_path,
-            manual_path=manual_path,
-            date_from=date_from,
-            date_to=date_to,
-            customer=args.customer,
-            as_csv=args.csv,
-        )
+    out = build_report(
+        events_paths,
+        idle_threshold=idle,
+        projects_path=projects_path,
+        manual_path=manual_path,
+        date_from=date_from,
+        date_to=date_to,
+        customer=args.customer,
+        as_csv=args.csv,
     )
+    if out == "No activity recorded." and (date_from or date_to):
+        # A filter that matched nothing is usually a mistyped period, not an
+        # empty store — say what span the store actually covers.
+        out = f"No activity in the selected period ({period_label(date_from, date_to)})."
+        span = data_span(sdir)
+        if span:
+            out += f" The store has observed activity from {span[0]} to {span[1]}."
+    print(out)
     return 0
 
 

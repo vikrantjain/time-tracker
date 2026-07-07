@@ -76,6 +76,8 @@ The file is read-only to the tool (you hand-edit it). A project that appears in 
 | `--csv` | Emit CSV (one row per customer/project) instead of the Markdown table. |
 | `--dir <path>` | Override the store directory (defaults to `$TIME_TRACKER_DIR` or `~/time-tracker`). |
 
+The Markdown table shows humanized durations (`2h 45m`); the total row also carries decimal hours (the number an invoice wants), and CSV output always uses decimal hours. Every table starts with a header line stating the period, customer filter, and idle threshold in effect. A filter that matches nothing tells you the date span the store actually covers, so a mistyped month is obvious.
+
 Filters compose, e.g. a customer's invoice for one month as CSV:
 
 ```

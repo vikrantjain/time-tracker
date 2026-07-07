@@ -266,8 +266,8 @@ class CustomerMapping(unittest.TestCase):
         self.assertIn("Acme Website", out)            # display name used
         self.assertIn("_subtotal_", out)              # >1 project -> subtotal row
         self.assertNotIn(report.UNMAPPED_LABEL, out)  # nothing unmapped
-        # subtotal wall-clock = 2.00h
-        self.assertIn("**2.00**", out)
+        # subtotal wall-clock = 2h
+        self.assertIn("**2h**", out)
 
     def test_partial_mapping_flags_only_unmapped(self):
         toml = '["/p/acme"]\ncustomer = "Acme Corp"\n'
@@ -544,7 +544,7 @@ class ManualTime(unittest.TestCase):
         # Rendered: manual row carries no engagement ("—"); wall-clock counts it.
         out = report.render_markdown({}, {}, projects, rows)
         self.assertIn("✎ manual", out)
-        self.assertIn("2.00", out)
+        self.assertIn("2h", out)
         manual_line = next(l for l in out.splitlines() if "✎ manual" in l)
         self.assertIn("—", manual_line)                    # engagement blank
 
@@ -568,8 +568,11 @@ class ManualTime(unittest.TestCase):
         self.assertEqual(wcs, [-1800, 7200])               # negative is its own adjustment
         out = report.render_markdown({}, {}, projects, rows)
         self.assertIn("correction", out)
-        # Net manual contribution to the customer subtotal/total = 1.5h.
-        self.assertIn("**1.50**", out)
+        self.assertIn("-30m", out)                         # correction cell keeps its sign
+        # Net manual contribution to the customer subtotal/total = 1.5h; the
+        # total row also carries the decimal form for invoicing.
+        self.assertIn("**1h 30m**", out)
+        self.assertIn("(1.50h)", out)
 
     def test_manual_via_build_report_and_date_filter(self):
         events = write_log([
@@ -592,7 +595,7 @@ class ManualTime(unittest.TestCase):
         self.assertIn("in range", out)
         self.assertNotIn("out of range", out)   # April entry filtered out
         # observed 1h + manual 2h = 3h subtotal for Acme.
-        self.assertIn("**3.00**", out)
+        self.assertIn("**3h**", out)
 
 
 class MonthlyRotation(unittest.TestCase):
@@ -656,7 +659,82 @@ class MonthlyRotation(unittest.TestCase):
             report.discover_event_files(d, f, t), date_from=f, date_to=t
         )
         self.assertIn("/p/acme", out)
-        self.assertIn("1.00", out)  # March's share: 23:00 -> midnight
+        self.assertIn("1h", out)  # March's share: 23:00 -> midnight
+
+
+class RenderingUX(unittest.TestCase):
+    def test_fmt_hm(self):
+        self.assertEqual(report.fmt_hm(2 * 3600 + 45 * 60), "2h 45m")
+        self.assertEqual(report.fmt_hm(2 * 3600), "2h")
+        self.assertEqual(report.fmt_hm(45 * 60), "45m")
+        self.assertEqual(report.fmt_hm(0), "0m")
+        self.assertEqual(report.fmt_hm(-1800), "-30m")
+        self.assertEqual(report.fmt_hm(29), "0m")     # rounds to the minute
+        self.assertEqual(report.fmt_hm(31), "1m")
+
+    def test_period_label(self):
+        d = lambda y, m, dd: datetime(y, m, dd).date()
+        self.assertEqual(report.period_label(None, None), "all time")
+        self.assertEqual(report.period_label(d(2026, 3, 1), d(2026, 3, 31)), "2026-03")
+        self.assertEqual(
+            report.period_label(d(2026, 3, 5), d(2026, 4, 20)), "2026-03-05 to 2026-04-20"
+        )
+        self.assertEqual(report.period_label(d(2026, 3, 5), None), "from 2026-03-05")
+        self.assertEqual(report.period_label(None, d(2026, 4, 20)), "through 2026-04-20")
+
+    def test_header_line_states_period_customer_threshold(self):
+        path = write_log([
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0), project="/p/acme"),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0), project="/p/acme"),
+        ])
+        proj = write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\n')
+        try:
+            f, t = report.month_range("2026-03")
+            out = report.build_report(
+                path, projects_path=proj, date_from=f, date_to=t, customer="Acme Corp"
+            )
+        finally:
+            os.remove(path)
+            os.remove(proj)
+        header = out.splitlines()[0]
+        self.assertIn("2026-03", header)
+        self.assertIn("customer: Acme Corp", header)
+        self.assertIn("idle threshold 15m", header)
+
+    def test_csv_has_no_header_line_and_keeps_decimal(self):
+        path = write_log([
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 30)),
+        ])
+        try:
+            out = report.build_report(path, as_csv=True)
+        finally:
+            os.remove(path)
+        self.assertTrue(out.startswith("customer,project,"))
+        self.assertIn("1.50", out)
+
+    def test_empty_filtered_report_states_store_span(self):
+        import contextlib
+        import io as _io
+
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "events-2026-03.jsonl"), "w", encoding="utf-8") as fh:
+            for e in [
+                ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+                ev("session_end", "s", ts(2026, 3, 5, 11, 0)),
+            ]:
+                fh.write(json.dumps(e) + "\n")
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            report.main(["--dir", d, "--month", "2025-01"])
+        out = buf.getvalue()
+        self.assertIn("No activity in the selected period (2025-01)", out)
+        self.assertIn("from 2026-03-02 to 2026-03-05", out)
+
+    def test_empty_unfiltered_report_unchanged(self):
+        self.assertEqual(
+            report.build_report("/nonexistent/path.jsonl"), "No activity recorded."
+        )
 
 
 class EndToEnd(unittest.TestCase):
@@ -679,10 +757,11 @@ class EndToEnd(unittest.TestCase):
         path = write_log(evs)
         try:
             out = report.build_report(path)
-            self.assertIn("| Project | Wall-clock (h) |", out)
+            self.assertIn("| Project | Wall-clock |", out)
             self.assertIn("/p/alpha", out)
-            self.assertIn("1.50", out)
+            self.assertIn("1h 30m", out)
             self.assertIn("**Total**", out)
+            self.assertTrue(out.startswith("Time report — all time"))
         finally:
             os.remove(path)
 
