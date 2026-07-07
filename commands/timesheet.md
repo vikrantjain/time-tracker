@@ -22,7 +22,7 @@ Any arguments are passed straight through as report filters: $ARGUMENTS
    python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" $ARGUMENTS
    ```
 
-   The engine reads the store at `$TIME_TRACKER_DIR` (default `~/time-tracker/`); do not pass `--dir` unless the user specifies a different location.
+   The engine reads the store at `$TIME_TRACKER_DIR` (default `~/.time-tracker/`); do not pass `--dir` unless the user specifies a different location.
 
 2. If the output is `No activity recorded.`, tell the user there's nothing tracked for that filter and suggest checking the date range / customer name, or that the plugin may not have been enabled in the relevant project. Then stop.
 

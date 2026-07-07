@@ -24,7 +24,7 @@
 #
 # The store lives OUTSIDE the plugin dir (wiped on update/uninstall) and is
 # rotated monthly so no single file grows forever:
-#   ${TIME_TRACKER_DIR:-$HOME/time-tracker}/events-YYYY-MM.jsonl
+#   ${TIME_TRACKER_DIR:-$HOME/.time-tracker}/events-YYYY-MM.jsonl
 # (report.py also reads the legacy pre-rotation events.jsonl when present.)
 #
 # Concurrent sessions append to the same file. Each line is one small
@@ -37,7 +37,7 @@
 event="${1:-}"
 payload="$(cat 2>/dev/null || true)"
 
-store_dir="${TIME_TRACKER_DIR:-$HOME/time-tracker}"
+store_dir="${TIME_TRACKER_DIR:-$HOME/.time-tracker}"
 events_file="${store_dir}/events-$(date +%Y-%m).jsonl"
 
 # Metadata only (no prompt/response text is ever read into a stored field).

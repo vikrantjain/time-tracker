@@ -4,7 +4,7 @@
 Reads the append-only event log produced by the capture hook and derives
 wall-clock time per project. Stdlib only (no third-party dependencies).
 
-Store location: ${TIME_TRACKER_DIR:-$HOME/time-tracker}
+Store location: ${TIME_TRACKER_DIR:-$HOME/.time-tracker}
   events-YYYY-MM.jsonl   observed session events (rotated monthly at write time)
   events.jsonl           legacy pre-rotation log, still read when present
 
@@ -60,7 +60,7 @@ def store_dir(override=None):
     if override:
         return override
     return os.environ.get("TIME_TRACKER_DIR") or os.path.join(
-        os.path.expanduser("~"), "time-tracker"
+        os.path.expanduser("~"), ".time-tracker"
     )
 
 
@@ -822,7 +822,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Time Tracker report engine.")
     parser.add_argument(
         "--dir",
-        help="Store directory (default: $TIME_TRACKER_DIR or ~/time-tracker).",
+        help="Store directory (default: $TIME_TRACKER_DIR or ~/.time-tracker).",
     )
     parser.add_argument(
         "--idle-threshold",

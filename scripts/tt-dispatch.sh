@@ -20,7 +20,7 @@ argline="${1:-}"
 action="${argline%% *}"          # first word ('' for an empty argline)
 rest="${argline#"$action"}"      # remainder (report filters / add args)
 
-store_dir="${TIME_TRACKER_DIR:-$HOME/time-tracker}"
+store_dir="${TIME_TRACKER_DIR:-$HOME/.time-tracker}"
 events_file="${store_dir}/events-$(date +%Y-%m).jsonl"
 now_ts="$(date +%s)"
 mkdir -p "$store_dir" 2>/dev/null || true
