@@ -477,6 +477,39 @@ class PauseResume(unittest.TestCase):
         # alpha keeps its full hour; beta loses the 30-min pause.
         self.assertEqual(wc, {"/p/alpha": 3600, "/p/beta": 1800})
 
+    def test_timed_pause_expires_at_until(self):
+        # No resume/prompt ever arrives; suppression still ends at `until`.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 30), until=ts(2026, 3, 2, 11, 0)),
+            ev("tool", "s", ts(2026, 3, 2, 11, 30)),
+            ev("session_end", "s", ts(2026, 3, 2, 12, 0)),
+        ]
+        wc, _ = self._wc_eng(evs)
+        self.assertEqual(wc, {"/p/alpha": 5400})  # 2h minus the 30m timed pause
+
+    def test_timed_pause_still_ends_early_on_prompt(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 30), until=ts(2026, 3, 2, 11, 30)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 50)),   # back early
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0)),
+        ]
+        wc, _ = self._wc_eng(evs)
+        self.assertEqual(wc, {"/p/alpha": 2400})  # only 10:30-10:50 suppressed
+
+    def test_timed_pause_trailing_capped_at_until(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 30), until=ts(2026, 3, 2, 10, 45)),
+            ev("tool", "s", ts(2026, 3, 2, 11, 0)),      # last event, still no prompt
+        ]
+        wc, _ = self._wc_eng(evs)
+        self.assertEqual(wc, {"/p/alpha": 2700})  # 1h minus 15m (10:30-10:45)
+
     def test_tool_event_does_not_close_pause(self):
         # Tool activity mid-pause is Claude finishing a turn, not the user
         # returning; only the next prompt auto-resumes.

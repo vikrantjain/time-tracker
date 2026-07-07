@@ -44,8 +44,11 @@ sys.stdout.write("".join(t + "\0" for t in toks))
 }
 
 # Append one metadata-only event line (used by pause/resume markers).
+# An optional second arg is a JSON object merged into the line (e.g. a timed
+# pause's {"until": ...}).
 append_event() {
   local ev="$1"
+  local extra="${2:-null}"
   jq -n -c \
     --argjson ts "${now_ts:-0}" \
     --arg event "$ev" \
@@ -53,11 +56,44 @@ append_event() {
     --arg project "${TT_PROJECT:-}" \
     --arg source "${TT_SOURCE:-}" \
     --arg reason "${TT_REASON:-}" \
+    --argjson extra "$extra" \
     '{ts: $ts, event: $event, session_id: $session_id, project: $project}
      + (if $source != "" then {source: $source} else {} end)
-     + (if $reason != "" then {reason: $reason} else {} end)' \
+     + (if $reason != "" then {reason: $reason} else {} end)
+     + ($extra // {})' \
     >> "$events_file" 2>/dev/null || true
 }
+
+# Echo "<ts> <until|->" for this session's open pause, or nothing when not
+# paused. Reads only the current month's tail — a miss fails open (the caller
+# behaves as if not paused, which at worst records a harmless extra marker).
+pause_state() {
+  local recent ts ev until state=""
+  [ -n "${TT_SESSION_ID:-}" ] || return 0
+  [ -f "$events_file" ] || return 0
+  recent="$(tail -n 200 "$events_file" 2>/dev/null \
+    | jq -rR --arg sid "$TT_SESSION_ID" \
+        'fromjson? // empty | select(.session_id == $sid)
+         | "\(.ts) \(.event) \(.until // "-")"' \
+    2>/dev/null || true)"
+  [ -n "$recent" ] || return 0
+  while read -r ts ev until; do
+    case "$ev" in
+      pause) [ -z "$state" ] && state="$ts $until" ;;
+      resume|prompt|session_end) state="" ;;
+    esac
+  done <<< "$recent"
+  if [ -n "$state" ]; then
+    set -- $state
+    # A timed pause expires on its own once `until` passes.
+    if [ "$2" != "-" ] && [ "$now_ts" -ge "$2" ] 2>/dev/null; then
+      state=""
+    fi
+  fi
+  printf '%s' "$state"
+}
+
+hhmm() { date -d "@$1" +%H:%M 2>/dev/null || printf '?'; }
 
 # Print a hook block response (no model turn, user-facing message) and exit.
 emit_block() {
@@ -163,13 +199,53 @@ case "$action" in
     emit_block "$out"
     ;;
   pause)
-    # Record a pause MARKER (not a heartbeat). The engine treats the span until
-    # the next resume / real prompt / session end as suppressed.
-    append_event "pause"
-    emit_block "⏸ Tracking paused for this session. Resume with 'tt resume' (or '/time-tracker:tt resume'), or just send your next prompt."
+    # pause [<duration>] [reason...] — record a pause MARKER (not a heartbeat).
+    # The engine suppresses the span until resume / next prompt / session end;
+    # a duration (bare number = minutes) additionally caps it at now+duration,
+    # so a forgotten 'tt resume' can't eat the afternoon.
+    cur="$(pause_state)"
+    if [ -n "$cur" ]; then
+      set -- $cur
+      tail_msg=""
+      [ "$2" != "-" ] && tail_msg=", auto-resumes $(hhmm "$2")"
+      emit_block "⏸ Already paused (since $(hhmm "$1")${tail_msg}). Resume with 'tt resume' or just send a prompt."
+    fi
+    mapfile -d '' -t pargs < <(tokenize "$rest")
+    until_ts=""
+    reason_txt=""
+    pause_dur_re='^([0-9]+\.?[0-9]*|\.[0-9]+)[smh]?$'
+    if [ "${#pargs[@]}" -gt 0 ] && [[ "${pargs[0]}" =~ $pause_dur_re ]]; then
+      secs="$(python3 -c '
+import sys
+s = sys.argv[1].lower()
+mult = {"s": 1, "m": 60, "h": 3600}.get(s[-1], 60)
+num = s[:-1] if s[-1] in "smh" else s
+print(int(float(num) * mult))
+' "${pargs[0]}" 2>/dev/null || true)"
+      [ -n "$secs" ] && until_ts=$((now_ts + secs))
+      reason_txt="${pargs[*]:1}"
+    else
+      reason_txt="${pargs[*]}"
+    fi
+    extra="$(jq -n -c \
+      --argjson until "${until_ts:-null}" \
+      --arg reason "$reason_txt" \
+      '(if $until != null then {until: $until} else {} end)
+       + (if $reason != "" then {reason: $reason} else {} end)' 2>/dev/null || printf 'null')"
+    append_event "pause" "$extra"
+    if [ -n "$until_ts" ]; then
+      emit_block "⏸ Paused until $(hhmm "$until_ts")${reason_txt:+ — ${reason_txt}}. Auto-resumes then, on 'tt resume', or on your next prompt."
+    fi
+    emit_block "⏸ Tracking paused for this session${reason_txt:+ — ${reason_txt}}. Resume with 'tt resume' (or '/time-tracker:tt resume'), or just send your next prompt."
     ;;
   resume)
+    cur="$(pause_state)"
+    # The marker is recorded either way: if the pause predates this month's
+    # log tail the state check can miss it, and a stray resume is harmless.
     append_event "resume"
+    if [ -z "$cur" ]; then
+      emit_block "▶ Wasn't paused — tracking was already running."
+    fi
     emit_block "▶ Tracking resumed."
     ;;
   help|"")
@@ -184,7 +260,7 @@ case "$action" in
       "  status                        Tracking state, paused?, time today (this project + all)" \
       "  map [<customer>] [--name <n>] Map the current project to a customer (bare form lists)" \
       "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
-      "  pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
+      "  pause [<dur>] [reason]        Pause tracking (dur caps it, bare number = minutes; auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \
       "  help                          Show this help" \
       "" \

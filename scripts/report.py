@@ -295,10 +295,12 @@ def compute_suppressed(events):
 
     A `pause` marker opens a suppressed span; it closes at the earliest of an
     explicit `resume`, the next real `prompt` (auto-resume), a `session_end`,
-    or — if none appears — the session's last event. `tool` heartbeats never
-    close a pause (Claude may still be finishing a turn the user paused
-    through). Spans are attributed to the project of the nearest preceding
-    session_start, i.e. the cwd active when the pause was typed.
+    or — if none appears — the session's last event. A TIMED pause carries an
+    `until` timestamp that additionally caps the span: whatever closes it,
+    nothing past `until` is suppressed (the pause expires on its own). `tool`
+    heartbeats never close a pause (Claude may still be finishing a turn the
+    user paused through). Spans are attributed to the project of the nearest
+    preceding session_start, i.e. the cwd active when the pause was typed.
     """
     by_session = {}
     for ev in events:
@@ -314,6 +316,7 @@ def compute_suppressed(events):
         )
         paused = False
         pstart = None
+        puntil = None
         pproj = None
         last_ts = None
         for ev in evs:
@@ -326,14 +329,20 @@ def compute_suppressed(events):
                 if not paused:
                     paused = True
                     pstart = t
+                    puntil = ev.get("until")
                     pproj = cur_proj
             elif et in ("resume", "prompt", "session_end"):
                 if paused:
-                    result.setdefault(pproj, []).append((pstart, t))
+                    end = t if puntil is None else min(t, puntil)
+                    if end > pstart:
+                        result.setdefault(pproj, []).append((pstart, end))
                     paused = False
                     pstart = None
+                    puntil = None
         if paused:
-            result.setdefault(pproj, []).append((pstart, last_ts))
+            end = last_ts if puntil is None else min(last_ts, puntil)
+            if end > pstart:
+                result.setdefault(pproj, []).append((pstart, end))
     return result
 
 

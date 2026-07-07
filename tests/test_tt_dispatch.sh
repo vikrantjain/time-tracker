@@ -135,6 +135,40 @@ bash "$dispatch" "pause" >/dev/null
 month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
 check "pause marker in monthly file" "pause" "$(jq -r '.event' "$month_file" 2>/dev/null | tail -1)"
 
+# 21. Timed pause stores until+reason and says when it auto-resumes.
+new_store
+export TT_SESSION_ID="sp1" TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" "pause 30m lunch break" | jq -r '.reason')"
+contains "timed pause message" "Paused until" "$out"
+contains "timed pause reason"  "lunch break"  "$out"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+row="$(tail -1 "$month_file")"
+check "pause reason stored" "lunch break" "$(printf '%s' "$row" | jq -r '.reason')"
+delta=$(( $(printf '%s' "$row" | jq -r '.until') - $(date +%s) ))
+ok="no"; [ "$delta" -ge 1740 ] && [ "$delta" -le 1860 ] && ok="yes"
+check "pause until ~30m ahead" "yes" "$ok"
+
+# 22. Pausing while paused refuses and reports since when.
+out="$(bash "$dispatch" "pause" | jq -r '.reason')"
+contains "already paused" "Already paused" "$out"
+check "no second pause marker" "1" "$(grep -c '"event":"pause"' "$month_file")"
+
+# 23. resume closes it; resuming again is called out.
+out="$(bash "$dispatch" "resume" | jq -r '.reason')"
+check "resume message" "▶ Tracking resumed." "$out"
+out="$(bash "$dispatch" "resume" | jq -r '.reason')"
+contains "double resume called out" "Wasn't paused" "$out"
+
+# 24. An expired timed pause no longer blocks a new pause.
+new_store
+export TT_SESSION_ID="sp2" TT_PROJECT="/proj/acme-api"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+now="$(date +%s)"
+printf '{"ts":%s,"event":"pause","session_id":"sp2","project":"/proj/acme-api","until":%s}\n' \
+  "$(( now - 3600 ))" "$(( now - 1800 ))" >> "$month_file"
+out="$(bash "$dispatch" "pause" | jq -r '.reason')"
+contains "expired timed pause is over" "Tracking paused" "$out"
+
 # 16. tt map creates the mapping and confirms it.
 new_store
 export TT_PROJECT="/proj/acme-api"
