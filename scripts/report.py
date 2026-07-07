@@ -833,6 +833,7 @@ def main(argv=None):
     parser.add_argument("--month", help="Whole-month shorthand (YYYY-MM) for --from/--to.")
     parser.add_argument("--customer", help="Restrict the report to one customer.")
     parser.add_argument("--csv", action="store_true", help="Emit CSV instead of a Markdown table.")
+    parser.add_argument("--out", help="Write the report to this file instead of printing it.")
     parser.add_argument(
         "period",
         nargs="?",
@@ -887,6 +888,20 @@ def main(argv=None):
         span = data_span(sdir)
         if span:
             out += f" The store has observed activity from {span[0]} to {span[1]}."
+    if args.out:
+        dest = os.path.expanduser(args.out)
+        if out.startswith("No activity"):
+            print(f"{out} Nothing written to {dest}.")
+            return 0
+        try:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(out + "\n")
+        except OSError as exc:
+            print(f"Could not write {dest}: {exc}")
+            return 0
+        kind = "CSV" if args.csv else "Markdown"
+        print(f"Wrote {kind} report ({len(out.splitlines())} lines) to {dest}")
+        return 0
     print(out)
     return 0
 

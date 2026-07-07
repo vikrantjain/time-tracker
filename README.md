@@ -77,6 +77,7 @@ A project that appears in the log but is **not** in `projects.toml` is shown fla
 | `--customer "<name>"` | Restrict to one customer's projects. |
 | `--idle-threshold <dur>` | Idle gap above which time is dropped from active-engagement (e.g. `30m`, `900s`, `1h`; bare number = minutes). |
 | `--csv` | Emit CSV (one row per customer/project) instead of the Markdown table. |
+| `--out <path>` | Write the report to a file and confirm the path (handy with `--csv` for invoices — from the `tt` sentinel the CSV would otherwise arrive as a message to copy-paste). |
 | `--dir <path>` | Override the store directory (defaults to `$TIME_TRACKER_DIR` or `~/time-tracker`). |
 
 The Markdown table shows humanized durations (`2h 45m`); the total row also carries decimal hours (the number an invoice wants), and CSV output always uses decimal hours. Every table starts with a header line stating the period, customer filter, and idle threshold in effect. A filter that matches nothing tells you the date span the store actually covers, so a mistyped month is obvious.

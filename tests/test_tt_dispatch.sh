@@ -256,5 +256,24 @@ bash "$dispatch" "pause" >/dev/null
 out="$(bash "$dispatch" "status" | jq -r '.reason')"
 contains "status shows paused" "paused" "$out"
 
+# 28. A typoed verb gets a suggestion.
+new_store
+out="$(bash "$dispatch" "reprot --month 2026-05" | jq -r '.reason')"
+contains "did-you-mean" "Did you mean 'tt report'?" "$out"
+out="$(bash "$dispatch" "xyzzy" | jq -r '.reason')"
+contains "no suggestion for gibberish" "Run 'tt help'" "$out"
+
+# 29. report --out writes the file and confirms instead of dumping it.
+new_store
+export TT_SESSION_ID="so1" TT_PROJECT="/proj/acme-api"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+now="$(date +%s)"
+printf '{"ts":%s,"event":"session_start","session_id":"so1","project":"/proj/acme-api"}\n{"ts":%s,"event":"session_end","session_id":"so1","project":"/proj/acme-api"}\n' \
+  "$(( now - 3600 ))" "$now" >> "$month_file"
+dest="$TIME_TRACKER_DIR/invoice.csv"
+out="$(bash "$dispatch" "report --csv --out $dest" | jq -r '.reason')"
+contains "out confirms write" "Wrote CSV report" "$out"
+check "out file exists" "customer,project,wall_clock_hours,active_engagement_hours" "$(head -1 "$dest" | tr -d '\r')"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

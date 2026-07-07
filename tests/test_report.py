@@ -905,6 +905,38 @@ class RenderingUX(unittest.TestCase):
         self.assertIn("No activity in the selected period (2025-01)", out)
         self.assertIn("from 2026-03-02 to 2026-03-05", out)
 
+    def test_out_writes_file_and_confirms(self):
+        import contextlib
+        import io as _io
+
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "events-2026-03.jsonl"), "w", encoding="utf-8") as fh:
+            for e in [
+                ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+                ev("session_end", "s", ts(2026, 3, 2, 11, 0)),
+            ]:
+                fh.write(json.dumps(e) + "\n")
+        dest = os.path.join(d, "invoice.csv")
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            report.main(["--dir", d, "--csv", "--out", dest])
+        self.assertIn("Wrote CSV report", buf.getvalue())
+        self.assertIn(dest, buf.getvalue())
+        with open(dest, encoding="utf-8") as fh:
+            self.assertTrue(fh.read().startswith("customer,project,"))
+
+    def test_out_skipped_when_nothing_to_report(self):
+        import contextlib
+        import io as _io
+
+        d = tempfile.mkdtemp()
+        dest = os.path.join(d, "invoice.csv")
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            report.main(["--dir", d, "--month", "2025-01", "--out", dest])
+        self.assertIn("Nothing written", buf.getvalue())
+        self.assertFalse(os.path.exists(dest))
+
     def test_empty_unfiltered_report_unchanged(self):
         self.assertEqual(
             report.build_report("/nonexistent/path.jsonl"), "No activity recorded."

@@ -314,6 +314,14 @@ print(int(float(num) * mult))
       "Tip: prefix the typed form with a backslash (\\tt ...) to send a literal 'tt' line to the model.")"
     ;;
   *)
-    emit_block "Unknown tt command: '${action}'. Run 'tt help' (or '/time-tracker:tt') for available commands."
+    sug="$(python3 -c '
+import difflib, sys
+verbs = ["report", "status", "map", "add", "undo", "pause", "resume", "help"]
+m = difflib.get_close_matches(sys.argv[1], verbs, 1, 0.6)
+print(m[0] if m else "")
+' "$action" 2>/dev/null || true)"
+    hint=""
+    [ -n "$sug" ] && hint=" Did you mean 'tt ${sug}'?"
+    emit_block "Unknown tt command: '${action}'.${hint} Run 'tt help' (or '/time-tracker:tt') for available commands."
     ;;
 esac
