@@ -645,6 +645,13 @@ def render_markdown(
     lines.append(
         f"| **Total** |  | **{fmt_hm(total_wc)}** ({fmt_hours(total_wc)}h) | **{fmt_hm(total_eng)}** |"
     )
+    if UNMAPPED_LABEL in groups:
+        lines += [
+            "",
+            f"{UNMAPPED_LABEL}: these projects aren't billed to anyone yet — "
+            "run 'tt map \"<Customer>\"' inside each one (or edit projects.toml "
+            "in the store directory).",
+        ]
     return "\n".join(lines)
 
 

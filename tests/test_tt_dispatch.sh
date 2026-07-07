@@ -135,6 +135,49 @@ bash "$dispatch" "pause" >/dev/null
 month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
 check "pause marker in monthly file" "pause" "$(jq -r '.event' "$month_file" 2>/dev/null | tail -1)"
 
+# 16. tt map creates the mapping and confirms it.
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" 'map "Acme Corp" --name "Acme API"' | jq -r '.reason')"
+contains "map confirms"      "Mapped /proj/acme-api" "$out"
+toml="$(cat "$TIME_TRACKER_DIR/projects.toml")"
+contains "map writes customer" 'customer = "Acme Corp"' "$toml"
+contains "map writes name"     'name = "Acme API"'      "$toml"
+
+# 17. Hand-written comments survive later map calls.
+printf '# hand-written billing note\n' >> "$TIME_TRACKER_DIR/projects.toml"
+export TT_PROJECT="/proj/beta"
+bash "$dispatch" 'map "Beta LLC"' >/dev/null
+toml="$(cat "$TIME_TRACKER_DIR/projects.toml")"
+contains "comment preserved"    "hand-written billing note" "$toml"
+contains "old mapping preserved" 'customer = "Acme Corp"'    "$toml"
+contains "new mapping added"     'customer = "Beta LLC"'     "$toml"
+
+# 18. Remapping an existing project rewrites its table in place.
+export TT_PROJECT="/proj/beta"
+bash "$dispatch" 'map "Gamma Inc"' >/dev/null
+toml="$(cat "$TIME_TRACKER_DIR/projects.toml")"
+contains "remap took effect" 'customer = "Gamma Inc"' "$toml"
+check "old customer gone" "" "$(grep 'Beta LLC' "$TIME_TRACKER_DIR/projects.toml" || true)"
+check "single table for project" "1" "$(grep -c '\["/proj/beta"\]' "$TIME_TRACKER_DIR/projects.toml")"
+
+# 19. Bare tt map lists mappings; no project context errors helpfully.
+out="$(bash "$dispatch" 'map' | jq -r '.reason')"
+contains "map lists" "Acme Corp" "$out"
+export TT_PROJECT=""
+out="$(bash "$dispatch" 'map "Acme Corp"' | jq -r '.reason')"
+contains "map without project" "no current project" "$out"
+
+# 20. An unmapped project in a report comes with the tt map hint.
+new_store
+export TT_SESSION_ID="sess9" TT_PROJECT="/proj/unmapped"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+now="$(date +%s)"
+printf '{"ts":%s,"event":"session_start","session_id":"sess9","project":"/proj/unmapped"}\n{"ts":%s,"event":"session_end","session_id":"sess9","project":"/proj/unmapped"}\n' \
+  "$(( now - 600 ))" "$now" >> "$month_file"
+out="$(bash "$dispatch" 'report' | jq -r '.reason')"
+contains "unmapped hint in report" "tt map" "$out"
+
 # 14. tt status reports tracking state and the status header.
 new_store
 export TT_SESSION_ID="sess1" TT_PROJECT="/proj/acme-api"

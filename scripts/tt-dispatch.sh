@@ -147,6 +147,15 @@ case "$action" in
   saved: ${record}"
     emit_block "$msg"
     ;;
+  map)
+    # map [<customer>] [--name <label>] [--list] — map the CURRENT project to
+    # a customer in projects.toml (hand-edits are preserved); bare form lists.
+    mapfile -d '' -t margs < <(tokenize "$rest")
+    out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/tt-map.py" --dir "$store_dir" \
+      --project "${TT_PROJECT:-}" "${margs[@]}" 2>&1)"
+    [ -z "$out" ] && out="(map unavailable)"
+    emit_block "$out"
+    ;;
   status)
     out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" \
       --status --session "${TT_SESSION_ID:-}" --project "${TT_PROJECT:-}" 2>&1)"
@@ -173,6 +182,7 @@ case "$action" in
       "  report [period] [filters]     Wall-clock + active-engagement per project/customer" \
       "                                (period: today, yesterday, week, last-week, month, last-month)" \
       "  status                        Tracking state, paused?, time today (this project + all)" \
+      "  map [<customer>] [--name <n>] Map the current project to a customer (bare form lists)" \
       "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
       "  pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \

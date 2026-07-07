@@ -243,6 +243,7 @@ class CustomerMapping(unittest.TestCase):
         self.assertIn(report.UNMAPPED_LABEL, out)
         self.assertIn("/p/acme", out)   # both projects listed under the unmapped group
         self.assertIn("/p/beta", out)
+        self.assertIn("tt map", out)    # actionable hint, not just a flag
 
     def test_mapped_rollup_under_customer(self):
         toml = (

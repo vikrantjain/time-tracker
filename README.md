@@ -47,7 +47,9 @@ Each event line is metadata only: `ts` (epoch seconds, UTC instant), `event`, `s
 
 ### Mapping projects to customers
 
-Create `projects.toml` in the store directory. Each table key is the **absolute project path** (the `cwd` recorded at session start); `customer` is required, `name` is an optional display label:
+The easy way: run **`tt map "Acme Corp"`** inside the project (optionally `--name "Acme Website"` for a display label). It writes the mapping for the current project into `projects.toml`; `tt map` with no arguments lists the existing mappings. New mappings are appended and remappings rewrite only that project's table, so any hand-written comments in the file survive.
+
+The file itself stays hand-editable. Each table key is the **absolute project path** (the `cwd` recorded at session start); `customer` is required, `name` is an optional display label:
 
 ```toml
 ["/home/vikrant/work/acme-website"]
@@ -61,7 +63,7 @@ customer = "Acme Corp"         # multiple projects roll up under one customer
 customer = "Beta LLC"
 ```
 
-The file is read-only to the tool (you hand-edit it). A project that appears in the log but is **not** in `projects.toml` is shown flagged as `⚠ unmapped` — never silently dropped — so you always notice unbilled work. A missing `projects.toml` simply means every project is unmapped.
+A project that appears in the log but is **not** in `projects.toml` is shown flagged as `⚠ unmapped` — never silently dropped — so you always notice unbilled work, and the report ends with a hint telling you to `tt map` it. A missing `projects.toml` simply means every project is unmapped.
 
 ## Reporting
 
@@ -104,6 +106,7 @@ These bookkeeping commands run entirely in-plugin and never reach the model — 
 Both forms share one dispatcher (`scripts/tt-dispatch.sh`), so behavior is identical. The verbs:
 
 - `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
+- `tt map [<customer>] [--name <label>]` — map the **current project** to a customer in `projects.toml` (bare `tt map` lists all mappings). Hand-edits and comments in the file are preserved.
 - `tt status` — one glance at the tracker: the current project (with its customer mapping, or a hint to map it), whether this session is tracked or paused, and today's time — this project, all projects, and engaged. The everyday "am I being tracked right now?" answer.
 - `tt pause` / `tt resume` — exclude a deliberate idle span (e.g. lunch) from a session you leave open. `tt pause` drops the clock; it auto-resumes on your next normal prompt, or sooner if you type `tt resume` (useful when you're back and reading before typing). The paused span is removed from **both** wall-clock and active-engagement. Markers are appended to the log (the log is never mutated) — they are not counted as activity.
 - `tt add <duration> [--to <project-or-customer>] [note]` — record billable time the hooks can't see (work outside Claude Code, or before the plugin was enabled). `<duration>` accepts `2h`, `90m`, or a bare number (= hours); a **negative** duration (`-30m`) records a correction. By default the time is attributed to the **current project** (the `cwd` you run it from), mapped to a customer at report time just like a session — so `tt add 2h fixed the deploy script` logs to wherever you are. Use **`--to <project-or-customer>`** to attribute it elsewhere — a project path, or a customer name directly (e.g. a meeting not tied to one repo): `tt add 30m --to "Acme Corp" kickoff call`. The note is everything else (quoting optional; apostrophes are fine — `tt add 2h don't forget the fix` keeps the whole note). Manual time is written to a separate `manual.jsonl` and appears in the report as a distinct `✎ manual` line under its customer — added to **wall-clock** but **excluded from active-engagement** (which is observed-only). A negative entry shows as its own adjustment, never netted into observed hours.
