@@ -5,5 +5,6 @@
   "author": {
     "name": "Vikrant Jain"
   },
+  "license": "MIT",
   "keywords": ["time-tracking", "billing", "productivity", "hooks", "timesheet"]
 }
