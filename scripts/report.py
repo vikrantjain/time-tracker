@@ -143,7 +143,12 @@ def load_projects(path):
 
 
 def load_manual(path):
-    """Load user-asserted time entries from manual.jsonl. Missing -> []."""
+    """Load user-asserted time entries from manual.jsonl. Missing -> [].
+
+    The file is append-only: a `manual_undo` line (written by `tt undo`)
+    strikes the latest surviving entry whose ts matches its target_ts —
+    nothing is ever rewritten or deleted.
+    """
     if not os.path.exists(path):
         return []
     entries = []
@@ -158,6 +163,12 @@ def load_manual(path):
                 continue
             if entry.get("source") == "manual":
                 entries.append(entry)
+            elif entry.get("source") == "manual_undo":
+                tts = entry.get("target_ts")
+                for i in range(len(entries) - 1, -1, -1):
+                    if entries[i].get("ts") == tts:
+                        del entries[i]
+                        break
     return entries
 
 

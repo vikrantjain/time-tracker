@@ -111,16 +111,17 @@ case "$action" in
     emit_block "$out"
     ;;
   add)
-    # add <duration> [--to <project-or-customer>] [note...]
+    # add <duration> [--to <project-or-customer>] [--on <YYYY-MM-DD>] [note...]
     #   duration : bare number = hours; suffix s/m/h; negative = correction.
     #   --to     : explicit target (project path or customer name). When
     #              omitted, the time is attributed to the CURRENT project (the
     #              cwd the command was invoked from), exactly like a session.
+    #   --on     : the local date the work happened (backfill); default today.
     #   note     : everything else (quoting optional); joined with spaces.
     mapfile -d '' -t aargs < <(tokenize "$rest")
     dur="${aargs[0]:-}"
     if [ -z "$dur" ]; then
-      emit_block "Usage: tt add <duration> [--to <project-or-customer>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" kickoff call)"
+      emit_block "Usage: tt add <duration> [--to <project-or-customer>] [--on <YYYY-MM-DD>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" --on 2026-07-03 kickoff call)"
     fi
     # Validate the duration BEFORE writing. Otherwise junk (e.g. `tt add fix
     # the bug`) is written with duration="fix", confirmed as "Recorded", then
@@ -132,9 +133,11 @@ case "$action" in
       emit_block "tt add: '$dur' isn't a valid duration. Use 2h, 90m, 900s, or a bare number (= hours); prefix with - for a correction (e.g. -30m)."
     fi
 
-    # Split the remaining args into an optional --to <value> and the note words.
+    # Split the remaining args into optional --to/--on values and the note words.
     target=""
     target_explicit=0
+    on_date=""
+    on_explicit=0
     pos=()
     i=1
     n=${#aargs[@]}
@@ -143,12 +146,26 @@ case "$action" in
         target="${aargs[$((i+1))]:-}"
         target_explicit=1
         i=$((i + 2))
+      elif [ "${aargs[$i]}" = "--on" ]; then
+        on_date="${aargs[$((i+1))]:-}"
+        on_explicit=1
+        i=$((i + 2))
       else
         pos+=("${aargs[$i]}")
         i=$((i + 1))
       fi
     done
     note="${pos[*]}"
+
+    if [ "$on_explicit" -eq 1 ]; then
+      if [ -z "$on_date" ]; then
+        emit_block "tt add: --on needs a date (YYYY-MM-DD)."
+      fi
+      if ! [[ "$on_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+         || [ "$(date -d "$on_date" +%F 2>/dev/null)" != "$on_date" ]; then
+        emit_block "tt add: '--on $on_date' isn't a valid date. Use YYYY-MM-DD (e.g. --on 2026-07-03)."
+      fi
+    fi
 
     defaulted=0
     if [ "$target_explicit" -eq 1 ]; then
@@ -169,7 +186,7 @@ case "$action" in
     record="$(jq -n -c \
       --argjson ts "${now_ts:-0}" \
       --arg project "$target" \
-      --arg date "$(date +%F)" \
+      --arg date "${on_date:-$(date +%F)}" \
       --arg duration "$dur" \
       --arg note "$note" \
       '{ts: $ts, source: "manual", project: $project, date: $date, duration: $duration, note: $note}' \
@@ -177,7 +194,7 @@ case "$action" in
     [ -n "$record" ] && printf '%s\n' "$record" >> "$manual_file" 2>/dev/null || true
     where="$target"
     [ "$defaulted" -eq 1 ] && where="$target (current project)"
-    msg="✎ Recorded ${dur} to '${where}'${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+    msg="✎ Recorded ${dur} to '${where}'${on_date:+ on ${on_date}}${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
     # Show the verbatim stored line so the user can confirm the entry is right.
     [ -n "$record" ] && msg="${msg}
   saved: ${record}"
@@ -197,6 +214,32 @@ case "$action" in
       --status --session "${TT_SESSION_ID:-}" --project "${TT_PROJECT:-}" 2>&1)"
     [ -z "$out" ] && out="(status unavailable)"
     emit_block "$out"
+    ;;
+  undo)
+    # Strike the LAST surviving manual entry by appending a manual_undo
+    # tombstone — the log itself is never rewritten. Repeat to strike earlier
+    # entries. Only touches tt add entries, never observed session events.
+    manual_file="${store_dir}/manual.jsonl"
+    last="$(python3 -c '
+import json, os, sys
+sys.path.insert(0, os.path.join(os.environ.get("CLAUDE_PLUGIN_ROOT", ""), "scripts"))
+import report
+entries = report.load_manual(sys.argv[1])
+print(json.dumps(entries[-1]) if entries else "")
+' "$manual_file" 2>/dev/null || true)"
+    if [ -z "$last" ]; then
+      emit_block "tt undo: no manual entries left to undo (only 'tt add' entries can be undone)."
+    fi
+    tts="$(printf '%s' "$last" | jq -r '.ts // empty' 2>/dev/null || true)"
+    if [ -z "$tts" ]; then
+      emit_block "tt undo: couldn't identify the last manual entry — check ${manual_file} by hand."
+    fi
+    jq -n -c --argjson ts "$now_ts" --argjson target "$tts" \
+      '{ts: $ts, source: "manual_undo", target_ts: $target}' \
+      >> "$manual_file" 2>/dev/null || true
+    emit_block "↩ Undid the last manual entry:
+  ${last}
+(Append-only: a strike marker was recorded, nothing was deleted. Repeat 'tt undo' to strike earlier entries.)"
     ;;
   pause)
     # pause [<duration>] [reason...] — record a pause MARKER (not a heartbeat).
@@ -259,7 +302,9 @@ print(int(float(num) * mult))
       "                                (period: today, yesterday, week, last-week, month, last-month)" \
       "  status                        Tracking state, paused?, time today (this project + all)" \
       "  map [<customer>] [--name <n>] Map the current project to a customer (bare form lists)" \
-      "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
+      "  add <dur> [--to <tgt>] [--on <date>] [note]" \
+      "                                Log off-session time (default: current project, today)" \
+      "  undo                          Strike the last 'tt add' entry (repeatable)" \
       "  pause [<dur>] [reason]        Pause tracking (dur caps it, bare number = minutes; auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \
       "  help                          Show this help" \

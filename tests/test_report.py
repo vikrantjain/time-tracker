@@ -582,6 +582,44 @@ class ManualTime(unittest.TestCase):
         manual_line = next(l for l in out.splitlines() if "✎ manual" in l)
         self.assertIn("—", manual_line)                    # engagement blank
 
+    def test_undo_tombstone_strikes_latest_matching(self):
+        path = self._manual_file([
+            {"ts": 100, "project": "x", "duration": "1h", "note": "first"},
+            {"ts": 200, "project": "x", "duration": "2h", "note": "second"},
+            {"source": "manual_undo", "ts": 300, "target_ts": 200},
+        ])
+        try:
+            entries = report.load_manual(path)
+        finally:
+            os.remove(path)
+        self.assertEqual([e["note"] for e in entries], ["first"])
+
+    def test_undo_twice_and_unmatched_target(self):
+        path = self._manual_file([
+            {"ts": 100, "project": "x", "duration": "1h", "note": "first"},
+            {"ts": 200, "project": "x", "duration": "2h", "note": "second"},
+            {"source": "manual_undo", "ts": 300, "target_ts": 200},
+            {"source": "manual_undo", "ts": 301, "target_ts": 100},
+            {"source": "manual_undo", "ts": 302, "target_ts": 999},  # no match: no-op
+        ])
+        try:
+            entries = report.load_manual(path)
+        finally:
+            os.remove(path)
+        self.assertEqual(entries, [])
+
+    def test_undo_same_ts_strikes_only_latest(self):
+        path = self._manual_file([
+            {"ts": 100, "project": "x", "duration": "1h", "note": "a"},
+            {"ts": 100, "project": "x", "duration": "2h", "note": "b"},
+            {"source": "manual_undo", "ts": 300, "target_ts": 100},
+        ])
+        try:
+            entries = report.load_manual(path)
+        finally:
+            os.remove(path)
+        self.assertEqual([e["note"] for e in entries], ["a"])
+
     def test_bare_duration_is_hours(self):
         rows = report.resolve_manual_rows(
             [{"project": "x", "duration": "3", "note": ""}], {}

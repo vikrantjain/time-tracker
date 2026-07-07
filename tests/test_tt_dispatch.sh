@@ -118,6 +118,35 @@ row="$(last_manual)"
 check "--to with apostrophe" "O'Brien Ltd" "$(printf '%s' "$row" | jq -r '.project')"
 check "note after quoted --to" "sync call" "$(printf '%s' "$row" | jq -r '.note')"
 
+# 25. --on backfills the entry to a past date and says so.
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" 'add 2h --on 2026-07-03 retro work' | jq -r '.reason')"
+contains "backfill message dates it" "on 2026-07-03" "$out"
+row="$(last_manual)"
+check "backfill date stored" "2026-07-03" "$(printf '%s' "$row" | jq -r '.date')"
+check "backfill note kept"   "retro work" "$(printf '%s' "$row" | jq -r '.note')"
+
+# 26. An invalid --on date is rejected up front; nothing written.
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" 'add 2h --on 2026-13-40 oops' | jq -r '.reason')"
+contains "invalid --on rejected" "isn't a valid date" "$out"
+check    "invalid --on no-write" "" "$(last_manual)"
+
+# 27. tt undo strikes the last add, walks backwards on repeat, then runs dry.
+new_store
+export TT_PROJECT="/proj/acme-api"
+bash "$dispatch" "add 1h first task" >/dev/null
+bash "$dispatch" "add 2h second task" >/dev/null
+out="$(bash "$dispatch" "undo" | jq -r '.reason')"
+contains "undo strikes latest"   "second task" "$out"
+contains "undo says what it did" "Undid"       "$out"
+out="$(bash "$dispatch" "undo" | jq -r '.reason')"
+contains "second undo strikes earlier" "first task" "$out"
+out="$(bash "$dispatch" "undo" | jq -r '.reason')"
+contains "undo runs dry" "no manual entries" "$out"
+
 # 12. Quoted report filters tokenize and reach the engine (model-free path).
 new_store
 out="$(bash "$dispatch" 'report --customer "Acme Corp"' | jq -r '.reason')"
