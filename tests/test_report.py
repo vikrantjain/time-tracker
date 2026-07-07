@@ -662,6 +662,36 @@ class MonthlyRotation(unittest.TestCase):
         self.assertIn("1h", out)  # March's share: 23:00 -> midnight
 
 
+class PeriodShorthands(unittest.TestCase):
+    REF = datetime(2026, 3, 4).date()  # a Wednesday
+
+    def _r(self, word):
+        f, t = report.period_range(word, today=self.REF)
+        return str(f), str(t)
+
+    def test_period_range_words(self):
+        self.assertEqual(self._r("today"), ("2026-03-04", "2026-03-04"))
+        self.assertEqual(self._r("yesterday"), ("2026-03-03", "2026-03-03"))
+        self.assertEqual(self._r("week"), ("2026-03-02", "2026-03-08"))       # Mon-Sun
+        self.assertEqual(self._r("last-week"), ("2026-02-23", "2026-03-01"))
+        self.assertEqual(self._r("month"), ("2026-03-01", "2026-03-31"))
+        self.assertEqual(self._r("last-month"), ("2026-02-01", "2026-02-28"))
+
+    def test_cli_accepts_shorthand(self):
+        import contextlib
+        import io as _io
+
+        d = tempfile.mkdtemp()
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            report.main(["--dir", d, "today"])
+        self.assertIn("No activity in the selected period", buf.getvalue())
+
+    def test_cli_rejects_shorthand_plus_month(self):
+        with self.assertRaises(SystemExit):
+            report.main(["--dir", "/tmp", "today", "--month", "2026-03"])
+
+
 class RenderingUX(unittest.TestCase):
     def test_fmt_hm(self):
         self.assertEqual(report.fmt_hm(2 * 3600 + 45 * 60), "2h 45m")

@@ -164,7 +164,8 @@ case "$action" in
       "time-tracker — session time tracking" \
       "Use either form:   tt <cmd>      or      /time-tracker:tt <cmd>" \
       "" \
-      "  report [filters]              Wall-clock + active-engagement per project/customer" \
+      "  report [period] [filters]     Wall-clock + active-engagement per project/customer" \
+      "                                (period: today, yesterday, week, last-week, month, last-month)" \
       "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
       "  pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \

@@ -428,6 +428,31 @@ def month_range(text):
     return first, last
 
 
+PERIOD_WORDS = ("today", "yesterday", "week", "last-week", "month", "last-month")
+
+
+def period_range(word, today=None):
+    """Expand a period shorthand into (date_from, date_to). Weeks run Mon-Sun."""
+    t = today or date.today()
+    if word == "today":
+        return t, t
+    if word == "yesterday":
+        y = t - timedelta(days=1)
+        return y, y
+    if word == "week":
+        mon = t - timedelta(days=t.weekday())
+        return mon, mon + timedelta(days=6)
+    if word == "last-week":
+        mon = t - timedelta(days=t.weekday() + 7)
+        return mon, mon + timedelta(days=6)
+    if word == "month":
+        return month_range(f"{t.year:04d}-{t.month:02d}")
+    if word == "last-month":
+        last = t.replace(day=1) - timedelta(days=1)
+        return month_range(f"{last.year:04d}-{last.month:02d}")
+    raise ValueError(f"unknown period shorthand: {word}")
+
+
 def period_label(date_from, date_to):
     """Human label for a date filter; collapses an exact calendar month."""
     if date_from is None and date_to is None:
@@ -683,13 +708,23 @@ def main(argv=None):
     parser.add_argument("--month", help="Whole-month shorthand (YYYY-MM) for --from/--to.")
     parser.add_argument("--customer", help="Restrict the report to one customer.")
     parser.add_argument("--csv", action="store_true", help="Emit CSV instead of a Markdown table.")
+    parser.add_argument(
+        "period",
+        nargs="?",
+        choices=PERIOD_WORDS,
+        help="Period shorthand (e.g. 'report today'); alternative to --month/--from/--to.",
+    )
     args = parser.parse_args(argv)
 
     if args.month and (args.date_from or args.date_to):
         parser.error("--month cannot be combined with --from/--to")
+    if args.period and (args.month or args.date_from or args.date_to):
+        parser.error(f"'{args.period}' cannot be combined with --month/--from/--to")
 
     date_from = date_to = None
-    if args.month:
+    if args.period:
+        date_from, date_to = period_range(args.period)
+    elif args.month:
         date_from, date_to = month_range(args.month)
     else:
         if args.date_from:

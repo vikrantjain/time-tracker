@@ -69,6 +69,7 @@ The file is read-only to the tool (you hand-edit it). A project that appears in 
 
 | Flag | Effect |
 | --- | --- |
+| `today` / `yesterday` / `week` / `last-week` / `month` / `last-month` | Period shorthand (positional, e.g. `tt report today`). Weeks run Mon–Sun. |
 | `--month YYYY-MM` | Restrict to a whole calendar month (local days). |
 | `--from YYYY-MM-DD` / `--to YYYY-MM-DD` | Restrict to an explicit inclusive date range. |
 | `--customer "<name>"` | Restrict to one customer's projects. |
@@ -84,7 +85,7 @@ Filters compose, e.g. a customer's invoice for one month as CSV:
 python3 scripts/report.py --month 2026-05 --customer "Acme Corp" --csv
 ```
 
-(`--month` cannot be combined with `--from`/`--to`.)
+(`--month`, the period shorthands, and `--from`/`--to` are mutually exclusive ways to pick the period.)
 
 ### Two ways to get a report
 

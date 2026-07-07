@@ -123,6 +123,11 @@ new_store
 out="$(bash "$dispatch" 'report --customer "Acme Corp"' | jq -r '.reason')"
 check "quoted report filter runs" "No activity recorded." "$out"
 
+# 13b. Period shorthand passes through to the engine.
+new_store
+out="$(bash "$dispatch" "report today" | jq -r '.reason')"
+contains "period shorthand runs" "No activity in the selected period" "$out"
+
 # 13. pause/resume markers land in the current MONTH's events file.
 new_store
 export TT_SESSION_ID="sess1" TT_PROJECT="/proj/acme-api"
