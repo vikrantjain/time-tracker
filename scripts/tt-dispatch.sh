@@ -147,6 +147,12 @@ case "$action" in
   saved: ${record}"
     emit_block "$msg"
     ;;
+  status)
+    out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" \
+      --status --session "${TT_SESSION_ID:-}" --project "${TT_PROJECT:-}" 2>&1)"
+    [ -z "$out" ] && out="(status unavailable)"
+    emit_block "$out"
+    ;;
   pause)
     # Record a pause MARKER (not a heartbeat). The engine treats the span until
     # the next resume / real prompt / session end as suppressed.
@@ -166,6 +172,7 @@ case "$action" in
       "" \
       "  report [period] [filters]     Wall-clock + active-engagement per project/customer" \
       "                                (period: today, yesterday, week, last-week, month, last-month)" \
+      "  status                        Tracking state, paused?, time today (this project + all)" \
       "  add <dur> [--to <tgt>] [note] Log off-session time (default target = current project)" \
       "  pause                         Exclude a deliberate idle span (auto-resumes on next prompt)" \
       "  resume                        Resume tracking now" \

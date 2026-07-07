@@ -649,6 +649,104 @@ def render_markdown(
 
 
 # --------------------------------------------------------------------------- #
+# Status                                                                      #
+# --------------------------------------------------------------------------- #
+def session_pause_state(events, session_id, now):
+    """Return (pause_ts, until_or_None) if `session_id` is paused at `now`.
+
+    A pause is open until a resume / real prompt / session_end; a timed pause
+    (carrying `until`) additionally expires on its own once `now` passes it.
+    Returns None when not paused.
+    """
+    state = None
+    sess = sorted(
+        (e for e in events if e.get("session_id") == session_id), key=lambda e: e["ts"]
+    )
+    for ev in sess:
+        et = ev.get("event")
+        if et == "pause":
+            if state is None:
+                state = (ev["ts"], ev.get("until"))
+        elif et in ("resume", "prompt", "session_end"):
+            state = None
+    if state and state[1] is not None and now >= state[1]:
+        return None
+    return state
+
+
+def _hhmm(ts):
+    return datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def build_status(sdir, session_id="", project="", brief=False, now=None):
+    """One-glance answer to: am I tracked, am I paused, how much today?
+
+    The querying user is present right now, so their open session is extended
+    to `now` with a synthetic in-memory heartbeat (nothing is written).
+    """
+    now = datetime.now().timestamp() if now is None else now
+    today = datetime.fromtimestamp(now).date()
+    events = load_events(discover_event_files(sdir, today, today))
+    projects = load_projects(os.path.join(sdir, "projects.toml"))
+
+    sess = [e for e in events if session_id and e.get("session_id") == session_id]
+    if any(e.get("event") == "session_start" for e in sess):
+        # 'tool' extends the interval without closing an open pause.
+        events = events + [
+            {"ts": now, "event": "tool", "session_id": session_id, "project": project}
+        ]
+
+    intervals = build_intervals(events)
+    suppressed = compute_suppressed(events)
+    wc = filter_by_date(wall_clock_by_project_day(intervals, suppressed), today, today)
+    eng = filter_by_date(
+        engagement_by_project_day(intervals, DEFAULT_IDLE_THRESHOLD_SECONDS, suppressed),
+        today,
+        today,
+    )
+    total = sum(days.get(today, 0.0) for days in wc.values())
+    total_eng = sum(days.get(today, 0.0) for days in eng.values())
+    here = wc.get(project, {}).get(today, 0.0)
+
+    paused = session_pause_state(events, session_id, now) if session_id else None
+
+    if brief:
+        if paused:
+            _, until = paused
+            tail = f" until {_hhmm(until)}" if until else ""
+            return f"⏸ paused{tail} · {fmt_hm(total)} today"
+        return f"⏱ {fmt_hm(total)} today"
+
+    mapping = projects.get(project, {})
+    if not project:
+        proj_line = "project: (none — not inside a tracked session)"
+    elif mapping.get("customer"):
+        name = mapping.get("name")
+        label = f"{mapping['customer']}" + (f" · {name}" if name else "")
+        proj_line = f"project: {project} → {label}"
+    else:
+        proj_line = (
+            f"project: {project} → {UNMAPPED_LABEL} — map it with: tt map \"<Customer>\""
+        )
+
+    if paused:
+        pts, until = paused
+        tail = f", auto-resumes {_hhmm(until)}" if until else ""
+        sess_line = f"session: ⏸ paused since {_hhmm(pts)}{tail} (resume: tt resume, or just prompt)"
+    elif any(e.get("event") == "session_start" for e in sess):
+        started = max(e["ts"] for e in sess if e.get("event") == "session_start")
+        sess_line = f"session: tracking (since {_hhmm(started)})"
+    else:
+        sess_line = "session: no events recorded yet"
+
+    today_line = (
+        f"today:   {fmt_hm(here)} this project · {fmt_hm(total)} all projects"
+        f" (engaged {fmt_hm(total_eng)})"
+    )
+    return "\n".join(["⏱ time-tracker status", proj_line, sess_line, today_line])
+
+
+# --------------------------------------------------------------------------- #
 # CLI                                                                         #
 # --------------------------------------------------------------------------- #
 def build_report(
@@ -714,7 +812,15 @@ def main(argv=None):
         choices=PERIOD_WORDS,
         help="Period shorthand (e.g. 'report today'); alternative to --month/--from/--to.",
     )
+    parser.add_argument("--status", action="store_true", help="Print tracking status instead of a report.")
+    parser.add_argument("--session", default="", help="Session id (used by --status).")
+    parser.add_argument("--project", default="", help="Current project path (used by --status).")
+    parser.add_argument("--brief", action="store_true", help="One-line --status output (for statuslines).")
     args = parser.parse_args(argv)
+
+    if args.status:
+        print(build_status(store_dir(args.dir), args.session, args.project, args.brief))
+        return 0
 
     if args.month and (args.date_from or args.date_to):
         parser.error("--month cannot be combined with --from/--to")

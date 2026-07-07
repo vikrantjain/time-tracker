@@ -692,6 +692,78 @@ class PeriodShorthands(unittest.TestCase):
             report.main(["--dir", "/tmp", "today", "--month", "2026-03"])
 
 
+class Status(unittest.TestCase):
+    def _store(self, events, month="2026-03", toml=None):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, f"events-{month}.jsonl"), "w", encoding="utf-8") as fh:
+            for e in events:
+                fh.write(json.dumps(e) + "\n")
+        if toml:
+            with open(os.path.join(d, "projects.toml"), "w", encoding="utf-8") as fh:
+                fh.write(toml)
+        return d
+
+    def test_brief_extends_own_open_session_to_now(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 5)),
+        ])
+        out = report.build_status(d, "s", "/p/alpha", brief=True, now=ts(2026, 3, 4, 11, 0))
+        self.assertEqual(out, "⏱ 1h today")
+
+    def test_brief_without_session_id_ends_at_last_heartbeat(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 5)),
+        ])
+        out = report.build_status(d, "", "", brief=True, now=ts(2026, 3, 4, 11, 0))
+        self.assertEqual(out, "⏱ 5m today")
+
+    def test_brief_paused_excludes_pause_span(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30)),
+        ])
+        out = report.build_status(d, "s", "/p/alpha", brief=True, now=ts(2026, 3, 4, 11, 0))
+        self.assertEqual(out, "⏸ paused · 30m today")
+
+    def test_full_status_mapped_project(self):
+        d = self._store(
+            [
+                ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+                ev("prompt", "s", ts(2026, 3, 4, 10, 0)),
+            ],
+            toml='["/p/alpha"]\ncustomer = "Acme Corp"\nname = "Alpha"\n',
+        )
+        out = report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 11, 0))
+        self.assertIn("time-tracker status", out)
+        self.assertIn("→ Acme Corp · Alpha", out)
+        self.assertIn("tracking (since 10:00)", out)
+        self.assertIn("1h this project", out)
+
+    def test_full_status_unmapped_suggests_tt_map(self):
+        d = self._store([ev("session_start", "s", ts(2026, 3, 4, 10, 0))])
+        out = report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 10, 30))
+        self.assertIn("tt map", out)
+
+    def test_session_pause_state_honors_until_expiry(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30), until=ts(2026, 3, 4, 10, 40)),
+        ]
+        self.assertIsNotNone(report.session_pause_state(evs, "s", ts(2026, 3, 4, 10, 35)))
+        self.assertIsNone(report.session_pause_state(evs, "s", ts(2026, 3, 4, 10, 45)))
+
+    def test_pause_state_closed_by_prompt(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 40)),
+        ]
+        self.assertIsNone(report.session_pause_state(evs, "s", ts(2026, 3, 4, 10, 45)))
+
+
 class RenderingUX(unittest.TestCase):
     def test_fmt_hm(self):
         self.assertEqual(report.fmt_hm(2 * 3600 + 45 * 60), "2h 45m")

@@ -135,5 +135,20 @@ bash "$dispatch" "pause" >/dev/null
 month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
 check "pause marker in monthly file" "pause" "$(jq -r '.event' "$month_file" 2>/dev/null | tail -1)"
 
+# 14. tt status reports tracking state and the status header.
+new_store
+export TT_SESSION_ID="sess1" TT_PROJECT="/proj/acme-api"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+printf '{"ts":%s,"event":"session_start","session_id":"sess1","project":"/proj/acme-api"}\n' \
+  "$(( $(date +%s) - 600 ))" >> "$month_file"
+out="$(bash "$dispatch" "status" | jq -r '.reason')"
+contains "status header"        "time-tracker status" "$out"
+contains "status shows tracking" "session: tracking"  "$out"
+
+# 15. tt status while paused says so.
+bash "$dispatch" "pause" >/dev/null
+out="$(bash "$dispatch" "status" | jq -r '.reason')"
+contains "status shows paused" "paused" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
