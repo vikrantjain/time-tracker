@@ -5,7 +5,8 @@ Reads the append-only event log produced by the capture hook and derives
 wall-clock time per project. Stdlib only (no third-party dependencies).
 
 Store location: ${TIME_TRACKER_DIR:-$HOME/time-tracker}
-  events.jsonl   observed session events (this story)
+  events-YYYY-MM.jsonl   observed session events (rotated monthly at write time)
+  events.jsonl           legacy pre-rotation log, still read when present
 
 Core model
 ----------
@@ -28,11 +29,12 @@ import csv
 import io
 import json
 import os
+import re
 import sys
 import tomllib
 from datetime import date, datetime, timedelta, time
 
-HEARTBEAT_EVENTS = {"session_start", "prompt", "stop"}
+HEARTBEAT_EVENTS = {"session_start", "prompt", "stop", "tool"}
 DEFAULT_IDLE_THRESHOLD_SECONDS = 15 * 60  # 15 minutes
 
 
@@ -62,23 +64,64 @@ def store_dir(override=None):
     )
 
 
-def load_events(path):
-    """Return events sorted by (session_id, ts). Missing/empty file -> []."""
-    if not os.path.exists(path):
-        return []
+LEGACY_EVENTS_FILE = "events.jsonl"
+MONTHLY_EVENTS_RE = re.compile(r"^events-(\d{4})-(\d{2})\.jsonl$")
+
+
+def discover_event_files(sdir, date_from=None, date_to=None):
+    """Return the event-file paths to load from a store directory.
+
+    Events are written to monthly files (events-YYYY-MM.jsonl); the legacy
+    pre-rotation events.jsonl is always included when present (it may span any
+    months). With a date filter, only monthly files within
+    [date_from - 1 month, date_to + 1 month] are loaded: the lookback catches
+    a session opened in the previous month, the lookahead catches the closing
+    events of a session that crossed the range's final midnight. A session
+    left open across two month boundaries without a resume is not
+    reconstructed — an accepted loss for a rare case.
+    """
+    paths = []
+    legacy = os.path.join(sdir, LEGACY_EVENTS_FILE)
+    if os.path.exists(legacy):
+        paths.append(legacy)
+    lo = None if date_from is None else date_from.year * 12 + date_from.month - 2
+    hi = None if date_to is None else date_to.year * 12 + date_to.month
+    try:
+        names = sorted(os.listdir(sdir))
+    except OSError:
+        names = []
+    for name in names:
+        m = MONTHLY_EVENTS_RE.match(name)
+        if not m:
+            continue
+        month_index = int(m.group(1)) * 12 + int(m.group(2)) - 1
+        if (lo is None or month_index >= lo) and (hi is None or month_index <= hi):
+            paths.append(os.path.join(sdir, name))
+    return paths
+
+
+def load_events(paths):
+    """Return events from one path or a list of paths (monthly rotation splits
+    one log across files; order doesn't matter — consumers sort by ts).
+    Missing/empty files -> []."""
+    if isinstance(paths, (str, os.PathLike)):
+        paths = [paths]
     events = []
-    with open(path, "r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # tolerate a partially-written trailing line
-            if "ts" not in ev or "event" not in ev:
-                continue
-            events.append(ev)
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # tolerate a partially-written trailing line
+                if "ts" not in ev or "event" not in ev:
+                    continue
+                events.append(ev)
     return events
 
 
@@ -252,8 +295,10 @@ def compute_suppressed(events):
 
     A `pause` marker opens a suppressed span; it closes at the earliest of an
     explicit `resume`, the next real `prompt` (auto-resume), a `session_end`,
-    or — if none appears — the session's last event. Spans are attributed to
-    the session's session_start project (cwd at start), matching segmentation.
+    or — if none appears — the session's last event. `tool` heartbeats never
+    close a pause (Claude may still be finishing a turn the user paused
+    through). Spans are attributed to the project of the nearest preceding
+    session_start, i.e. the cwd active when the pause was typed.
     """
     by_session = {}
     for ev in events:
@@ -262,28 +307,33 @@ def compute_suppressed(events):
     result = {}
     for evs in by_session.values():
         evs = sorted(evs, key=lambda e: e["ts"])
-        sproj = next(
+        # Fallback for a pause seen before any session_start (truncated log).
+        cur_proj = next(
             (e.get("project", "") for e in evs if e.get("event") == "session_start"),
             evs[0].get("project", "") if evs else "",
         )
         paused = False
         pstart = None
+        pproj = None
         last_ts = None
         for ev in evs:
             t = ev["ts"]
             et = ev.get("event")
             last_ts = t
+            if et == "session_start":
+                cur_proj = ev.get("project", "") or cur_proj
             if et == "pause":
                 if not paused:
                     paused = True
                     pstart = t
+                    pproj = cur_proj
             elif et in ("resume", "prompt", "session_end"):
                 if paused:
-                    result.setdefault(sproj, []).append((pstart, t))
+                    result.setdefault(pproj, []).append((pstart, t))
                     paused = False
                     pstart = None
         if paused:
-            result.setdefault(sproj, []).append((pstart, last_ts))
+            result.setdefault(pproj, []).append((pstart, last_ts))
     return result
 
 
@@ -526,7 +576,7 @@ def render_markdown(wc_by_project_day, eng_by_project_day, projects=None, manual
 # CLI                                                                         #
 # --------------------------------------------------------------------------- #
 def build_report(
-    events_path,
+    events_path,  # one events file, or a list of them (monthly rotation)
     idle_threshold=DEFAULT_IDLE_THRESHOLD_SECONDS,
     projects_path=None,
     manual_path=None,
@@ -593,13 +643,13 @@ def main(argv=None):
             date_to = parse_date(args.date_to)
 
     sdir = store_dir(args.dir)
-    events_path = os.path.join(sdir, "events.jsonl")
+    events_paths = discover_event_files(sdir, date_from, date_to)
     projects_path = os.path.join(sdir, "projects.toml")
     manual_path = os.path.join(sdir, "manual.jsonl")
     idle = parse_duration(args.idle_threshold)
     print(
         build_report(
-            events_path,
+            events_paths,
             idle_threshold=idle,
             projects_path=projects_path,
             manual_path=manual_path,

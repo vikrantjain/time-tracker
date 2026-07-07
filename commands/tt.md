@@ -15,8 +15,9 @@ argument prints the help.
 ## Fallback (only if the hook did not run)
 
 If you are reading this, the `UserPromptExpansion` hook did not intercept the
-command (e.g. the plugin's hooks are not active). Run the dispatcher yourself and
-relay its `reason` field to the user:
+command (e.g. the plugin's hooks are not active). Unlike the normal in-plugin
+path, this fallback **does cost a model turn** — you are the model running it.
+Run the dispatcher yourself and relay its `reason` field to the user:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/tt-dispatch.sh" "$ARGUMENTS"

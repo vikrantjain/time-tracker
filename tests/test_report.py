@@ -193,6 +193,32 @@ class Engagement(unittest.TestCase):
         self.assertEqual(report.parse_duration("90s"), 90)
         self.assertEqual(report.parse_duration("1.5h"), 5400)
 
+    def test_tool_events_bridge_long_turn_engagement(self):
+        # A 40-min autonomous turn: without the tool heartbeats the
+        # prompt->stop gap (>15m) would be dropped from engagement entirely.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+        ]
+        for i in range(1, 8):
+            evs.append(ev("tool", "s", ts(2026, 3, 2, 10, 5 * i)))
+        evs += [
+            ev("stop", "s", ts(2026, 3, 2, 10, 40)),
+            ev("session_end", "s", ts(2026, 3, 2, 10, 40)),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(project_engagement(ivs, self.THRESH), {"/p/alpha": 2400})
+
+    def test_tool_event_closes_crashed_interval(self):
+        # tool is a heartbeat: a crash after tool activity bills up to it.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("tool", "s", ts(2026, 3, 2, 10, 30)),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(ivs[0]["end"] - ivs[0]["start"], 1800)
+
 
 def write_projects_toml(text):
     fd, path = tempfile.mkstemp(suffix=".toml")
@@ -433,6 +459,39 @@ class PauseResume(unittest.TestCase):
         self.assertEqual(wc, {"/p/alpha": 600})
         self.assertEqual(eng, {"/p/alpha": 600})
 
+    def test_pause_attributed_to_project_at_pause_time(self):
+        # One session, resumed under a different cwd: the pause typed in the
+        # second sub-interval must be subtracted from the SECOND project.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0), project="/p/alpha"),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 0), project="/p/alpha"),
+            ev("session_start", "s", ts(2026, 3, 2, 12, 0), project="/p/beta"),
+            ev("prompt", "s", ts(2026, 3, 2, 12, 0), project="/p/beta"),
+            ev("pause", "s", ts(2026, 3, 2, 12, 10), project="/p/beta"),
+            ev("resume", "s", ts(2026, 3, 2, 12, 40), project="/p/beta"),
+            ev("session_end", "s", ts(2026, 3, 2, 13, 0), project="/p/beta"),
+        ]
+        self.assertEqual(set(report.compute_suppressed(evs)), {"/p/beta"})
+        wc, _ = self._wc_eng(evs)
+        # alpha keeps its full hour; beta loses the 30-min pause.
+        self.assertEqual(wc, {"/p/alpha": 3600, "/p/beta": 1800})
+
+    def test_tool_event_does_not_close_pause(self):
+        # Tool activity mid-pause is Claude finishing a turn, not the user
+        # returning; only the next prompt auto-resumes.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 10)),
+            ev("tool", "s", ts(2026, 3, 2, 10, 20)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 40)),
+            ev("session_end", "s", ts(2026, 3, 2, 10, 50)),
+        ]
+        sup = report.compute_suppressed(evs)
+        self.assertEqual(
+            sup, {"/p/alpha": [(ts(2026, 3, 2, 10, 10), ts(2026, 3, 2, 10, 40))]}
+        )
+
     def test_subtract_intervals_helper(self):
         self.assertEqual(
             report.subtract_intervals([(0, 100)], [(20, 30), (50, 60)]),
@@ -534,6 +593,70 @@ class ManualTime(unittest.TestCase):
         self.assertNotIn("out of range", out)   # April entry filtered out
         # observed 1h + manual 2h = 3h subtotal for Acme.
         self.assertIn("**3.00**", out)
+
+
+class MonthlyRotation(unittest.TestCase):
+    def _store(self, files):
+        d = tempfile.mkdtemp()
+        for name, events in files.items():
+            with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
+                for e in events:
+                    fh.write(json.dumps(e) + "\n")
+        return d
+
+    def test_discovery_windows_monthly_files(self):
+        d = self._store({
+            "events.jsonl": [],
+            "events-2026-01.jsonl": [],
+            "events-2026-03.jsonl": [],
+            "events-2026-05.jsonl": [],
+            "events-2026-07.jsonl": [],
+        })
+        got = report.discover_event_files(
+            d, datetime(2026, 3, 5).date(), datetime(2026, 4, 20).date()
+        )
+        names = [os.path.basename(p) for p in got]
+        # Legacy always loads; monthly window = Feb..May, so only 03 and 05.
+        self.assertEqual(
+            names, ["events.jsonl", "events-2026-03.jsonl", "events-2026-05.jsonl"]
+        )
+
+    def test_discovery_no_filter_loads_everything(self):
+        d = self._store({
+            "events-2026-01.jsonl": [],
+            "events-2026-12.jsonl": [],
+            "notes.txt-events-2026-02.jsonl": [],  # non-matching name ignored
+        })
+        names = [os.path.basename(p) for p in report.discover_event_files(d)]
+        self.assertEqual(names, ["events-2026-01.jsonl", "events-2026-12.jsonl"])
+
+    def test_load_events_accepts_single_path_and_list(self):
+        d = self._store({
+            "events-2026-03.jsonl": [ev("session_start", "s", ts(2026, 3, 2, 10, 0))],
+            "events-2026-04.jsonl": [ev("session_end", "s", ts(2026, 4, 1, 10, 0))],
+        })
+        one = report.load_events(os.path.join(d, "events-2026-03.jsonl"))
+        both = report.load_events(report.discover_event_files(d))
+        self.assertEqual(len(one), 1)
+        self.assertEqual(len(both), 2)
+
+    def test_session_spanning_month_boundary_reassembled(self):
+        # session_start lands in the March file, session_end in April's; a
+        # March report must still see a closed interval (23:00 -> midnight).
+        d = self._store({
+            "events-2026-03.jsonl": [
+                ev("session_start", "s", ts(2026, 3, 31, 23, 0), project="/p/acme")
+            ],
+            "events-2026-04.jsonl": [
+                ev("session_end", "s", ts(2026, 4, 1, 1, 0), project="/p/acme")
+            ],
+        })
+        f, t = report.month_range("2026-03")
+        out = report.build_report(
+            report.discover_event_files(d, f, t), date_from=f, date_to=t
+        )
+        self.assertIn("/p/acme", out)
+        self.assertIn("1.00", out)  # March's share: 23:00 -> midnight
 
 
 class EndToEnd(unittest.TestCase):

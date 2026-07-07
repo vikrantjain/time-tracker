@@ -8,9 +8,9 @@ Capture is passive (hooks). Reporting and corrections are on demand and cost **n
 
 Three layers:
 
-1. **Capture hook** (`hooks/scripts/track-event.sh`) — fires on `SessionStart`, `UserPromptSubmit`, `Stop`, and `SessionEnd`, appending one **metadata-only** JSON line per event. No prompt or response text is ever stored.
-2. **JSONL store** — an append-only log keyed by absolute project path.
-3. **Report engine** (`scripts/report.py`, stdlib-only Python 3) — derives wall-clock and active-engagement at report time.
+1. **Capture hook** (`hooks/scripts/track-event.sh`) — fires on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and `SessionEnd`, appending one **metadata-only** JSON line per event. No prompt or response text is ever stored. The `PostToolUse` (`tool`) heartbeat exists so a long autonomous turn — where minutes pass between your prompt and Claude's stop — still counts as active engagement.
+2. **JSONL store** — an append-only log keyed by absolute project path, **rotated monthly** so no single file grows forever. Heartbeats are **throttled** (at most one per session per 60s for prompt/stop, per 300s for tool activity) — the idle threshold works at minutes scale, so sub-minute precision would be pure log bloat. Session boundaries and pause/resume markers are never throttled.
+3. **Report engine** (`scripts/report.py`, stdlib-only Python 3) — derives wall-clock and active-engagement at report time, loading only the monthly files that overlap the requested date range.
 
 ### The two metrics
 
@@ -36,11 +36,14 @@ A single **visible** central directory, so billing data outlives plugin updates/
 
 Files:
 
-- `events.jsonl` — observed session events (auto-created on first event).
+- `events-YYYY-MM.jsonl` — observed session events, one file per calendar month (auto-created on first event). Reports only load the months overlapping the requested date range (±1 month, so sessions spanning a month boundary are reassembled).
+- `events.jsonl` — legacy pre-rotation log; if present it is still read by every report. No migration needed — new events simply go to the monthly files.
 - `manual.jsonl` — user-asserted time written by `tt add` (separate from observed events).
 - `projects.toml` — hand-edited absolute-path → customer mapping (see below).
 
-Each `events.jsonl` line is metadata only: `ts` (epoch seconds, UTC instant), `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end). Local time and calendar day are derived from `ts` at report time using the machine's timezone — no human-readable timestamp is stored.
+Each event line is metadata only: `ts` (epoch seconds, UTC instant), `event`, `session_id`, `project` (absolute cwd), plus `source` (on session start) or `reason` (on session end). Local time and calendar day are derived from `ts` at report time using the machine's timezone — no human-readable timestamp is stored.
+
+> **Note on timezone:** day bucketing uses the machine's timezone *at report time*, so historical day boundaries shift if you change timezones between working and reporting.
 
 ### Mapping projects to customers
 
@@ -99,11 +102,11 @@ Both forms share one dispatcher (`scripts/tt-dispatch.sh`), so behavior is ident
 
 - `tt report [filters]` — print a timesheet (accepts the reporting flags above, e.g. `tt report --month 2026-05 --customer "Acme Corp"`). The result is shown to you directly; Claude never sees it.
 - `tt pause` / `tt resume` — exclude a deliberate idle span (e.g. lunch) from a session you leave open. `tt pause` drops the clock; it auto-resumes on your next normal prompt, or sooner if you type `tt resume` (useful when you're back and reading before typing). The paused span is removed from **both** wall-clock and active-engagement. Markers are appended to the log (the log is never mutated) — they are not counted as activity.
-- `tt add <duration> [--to <project-or-customer>] [note]` — record billable time the hooks can't see (work outside Claude Code, or before the plugin was enabled). `<duration>` accepts `2h`, `90m`, or a bare number (= hours); a **negative** duration (`-30m`) records a correction. By default the time is attributed to the **current project** (the `cwd` you run it from), mapped to a customer at report time just like a session — so `tt add 2h fixed the deploy script` logs to wherever you are. Use **`--to <project-or-customer>`** to attribute it elsewhere — a project path, or a customer name directly (e.g. a meeting not tied to one repo): `tt add 30m --to "Acme Corp" kickoff call`. The note is everything else (quoting optional). Manual time is written to a separate `manual.jsonl` and appears in the report as a distinct `✎ manual` line under its customer — added to **wall-clock** but **excluded from active-engagement** (which is observed-only). A negative entry shows as its own adjustment, never netted into observed hours.
+- `tt add <duration> [--to <project-or-customer>] [note]` — record billable time the hooks can't see (work outside Claude Code, or before the plugin was enabled). `<duration>` accepts `2h`, `90m`, or a bare number (= hours); a **negative** duration (`-30m`) records a correction. By default the time is attributed to the **current project** (the `cwd` you run it from), mapped to a customer at report time just like a session — so `tt add 2h fixed the deploy script` logs to wherever you are. Use **`--to <project-or-customer>`** to attribute it elsewhere — a project path, or a customer name directly (e.g. a meeting not tied to one repo): `tt add 30m --to "Acme Corp" kickoff call`. The note is everything else (quoting optional; apostrophes are fine — `tt add 2h don't forget the fix` keeps the whole note). Manual time is written to a separate `manual.jsonl` and appears in the report as a distinct `✎ manual` line under its customer — added to **wall-clock** but **excluded from active-engagement** (which is observed-only). A negative entry shows as its own adjustment, never netted into observed hours.
 - `tt help` (or a bare `tt`, or `/time-tracker:tt` with no argument) — print this list of commands. Static text only; nothing is logged.
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 
 ## Status
 
-Under construction — see `docs/IMPLEMENTATION_PLAN.md`. This README is filled in story by story.
+Feature-complete: passive capture (with heartbeat throttling and monthly log rotation), wall-clock + active-engagement reporting, customer mapping, billing-period filters, CSV export, pause/resume, manual time entry, and the model-free `tt` command set. Tests live in `tests/` (report engine, dispatcher, and capture hook).

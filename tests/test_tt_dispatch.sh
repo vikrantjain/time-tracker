@@ -100,5 +100,35 @@ contains "echo saved label"    "saved:"             "$out"
 contains "echo saved duration" "\"duration\":\"2h\"" "$out"
 contains "echo saved note"     "fixed login bug"     "$out"
 
+# 10. Apostrophe in a free-text note keeps every token (xargs regression:
+#     the old tokenizer dropped everything after the unmatched quote).
+new_store
+export TT_PROJECT="/proj/acme-api"
+bash "$dispatch" "add 2h don't forget the fix" >/dev/null
+row="$(last_manual)"
+check "apostrophe note kept"    "don't forget the fix" "$(printf '%s' "$row" | jq -r '.note')"
+check "apostrophe duration"     "2h"                   "$(printf '%s' "$row" | jq -r '.duration')"
+
+# 11. Apostrophe inside a double-quoted --to value still parses as one token.
+new_store
+export TT_PROJECT="/proj/beta"
+argline="add 30m --to \"O'Brien Ltd\" sync call"
+bash "$dispatch" "$argline" >/dev/null
+row="$(last_manual)"
+check "--to with apostrophe" "O'Brien Ltd" "$(printf '%s' "$row" | jq -r '.project')"
+check "note after quoted --to" "sync call" "$(printf '%s' "$row" | jq -r '.note')"
+
+# 12. Quoted report filters tokenize and reach the engine (model-free path).
+new_store
+out="$(bash "$dispatch" 'report --customer "Acme Corp"' | jq -r '.reason')"
+check "quoted report filter runs" "No activity recorded." "$out"
+
+# 13. pause/resume markers land in the current MONTH's events file.
+new_store
+export TT_SESSION_ID="sess1" TT_PROJECT="/proj/acme-api"
+bash "$dispatch" "pause" >/dev/null
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+check "pause marker in monthly file" "pause" "$(jq -r '.event' "$month_file" 2>/dev/null | tail -1)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -21,9 +21,27 @@ action="${argline%% *}"          # first word ('' for an empty argline)
 rest="${argline#"$action"}"      # remainder (report filters / add args)
 
 store_dir="${TIME_TRACKER_DIR:-$HOME/time-tracker}"
-events_file="${store_dir}/events.jsonl"
+events_file="${store_dir}/events-$(date +%Y-%m).jsonl"
 now_ts="$(date +%s)"
 mkdir -p "$store_dir" 2>/dev/null || true
+
+# Tokenize a string into NUL-terminated tokens honoring shell-style quotes,
+# WITHOUT invoking a shell on it. Unbalanced quotes — an apostrophe in a free-
+# text note like `tt add 2h don't forget` — fall back to plain whitespace
+# splitting instead of silently dropping every token after the quote (which is
+# what the previous xargs-based tokenizer did). python3 is already a hard
+# dependency via report.py.
+tokenize() {
+  python3 -c '
+import shlex, sys
+s = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    toks = shlex.split(s)
+except ValueError:
+    toks = s.split()
+sys.stdout.write("".join(t + "\0" for t in toks))
+' "$1" 2>/dev/null || true
+}
 
 # Append one metadata-only event line (used by pause/resume markers).
 append_event() {
@@ -51,9 +69,7 @@ emit_block() {
 
 case "$action" in
   report)
-    # Tokenize the filter string honoring quotes WITHOUT invoking a shell
-    # (xargs parses quotes/escapes but never runs the tokens as a command).
-    mapfile -t rargs < <(printf '%s' "$rest" | xargs -r -n1 printf '%s\n' 2>/dev/null || true)
+    mapfile -d '' -t rargs < <(tokenize "$rest")
     out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" "${rargs[@]}" 2>&1)"
     [ -z "$out" ] && out="(no output)"
     emit_block "$out"
@@ -65,8 +81,7 @@ case "$action" in
     #              omitted, the time is attributed to the CURRENT project (the
     #              cwd the command was invoked from), exactly like a session.
     #   note     : everything else (quoting optional); joined with spaces.
-    # Tokenized honoring quotes WITHOUT invoking a shell.
-    mapfile -t aargs < <(printf '%s' "$rest" | xargs -r -n1 printf '%s\n' 2>/dev/null || true)
+    mapfile -d '' -t aargs < <(tokenize "$rest")
     dur="${aargs[0]:-}"
     if [ -z "$dur" ]; then
       emit_block "Usage: tt add <duration> [--to <project-or-customer>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" kickoff call)"
