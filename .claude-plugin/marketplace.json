@@ -1,0 +1,12 @@
+{
+    "name": "time-tracker",
+    "owner": {
+        "name": "Vikrant Jain"
+    },
+    "plugins": [
+        {
+            "name": "time-tracker",
+            "source": "."
+        }
+    ]
+}

@@ -4,6 +4,49 @@ A Claude Code plugin that records how much **wall-clock time** you spend working
 
 Capture is passive (hooks). Reporting and corrections are on demand and cost **no model turn**.
 
+## Requirements
+
+- **Claude Code** with plugin support (the plugin is loaded via `/plugin`).
+- **`python3`** (3.11+, for `tomllib`) on `PATH` — the report engine and helpers are stdlib-only, no `pip install`.
+- **`jq`** on `PATH` — the capture hook and dispatcher use it to read/write the JSONL store.
+
+> Both `python3` and `jq` must be installed **before** you enable the plugin. The hooks **fail open**: if `jq` is missing they exit quietly rather than erroring, so tracking would silently record nothing. Verify with `python3 --version` and `jq --version`, then run `tt status` after enabling to confirm capture is live.
+
+## Installation
+
+The repo is its own plugin marketplace (it ships a `.claude-plugin/marketplace.json`), so add it and install in one flow:
+
+```
+/plugin marketplace add vikrantjain/time-tracker    # or the full URL: https://github.com/vikrantjain/time-tracker.git
+/plugin install time-tracker
+```
+
+`/plugin marketplace add` registers the marketplace; `/plugin install` fetches the plugin. To update later, `/plugin marketplace update time-tracker` then reinstall. Installing makes the plugin *available*; you still opt in per project — see [Enabling it](#enabling-it).
+
+## Quick start
+
+1. **Enable** the plugin for the current project (local scope — see [Enabling it](#enabling-it)):
+   ```
+   /plugin
+   ```
+2. **Work normally.** Every session, prompt, and tool call is captured passively — nothing to run, no tokens spent.
+3. **Check it's tracking** at any time:
+   ```
+   tt status
+   ```
+   → `today: 1h 30m this project · 1h 30m all projects (engaged 1h 05m)`
+4. **Map the project to a customer** (once per project), so reports roll up for billing:
+   ```
+   tt map "Acme Corp"
+   ```
+5. **Pull a report** whenever you need one — instant, no model turn:
+   ```
+   tt report today
+   tt report --month 2026-07 --customer "Acme Corp" --csv
+   ```
+
+That's the whole loop. Everything below is detail on how it works and the full command set.
+
 ## How it works
 
 Three layers:
