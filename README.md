@@ -77,7 +77,7 @@ A single central directory, so billing data outlives plugin updates/uninstalls (
 - Default: `~/.time-tracker/`
 - Override: set `TIME_TRACKER_DIR` to an absolute path.
 
-> **Upgrading from ≤0.2.x?** The default used to be `~/time-tracker/`. There is no automatic migration: either move the directory (`mv ~/time-tracker ~/.time-tracker`) or set `TIME_TRACKER_DIR=$HOME/time-tracker` to keep the old location.
+> **Upgrading from 0.2.0 or earlier?** The default used to be `~/time-tracker/`. There is no automatic migration: either move the directory (`mv ~/time-tracker ~/.time-tracker`) or set `TIME_TRACKER_DIR=$HOME/time-tracker` to keep the old location.
 
 Files:
 
