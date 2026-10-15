@@ -1,5 +1,6 @@
 {
   "description": "Capture session activity (metadata only) to an append-only JSONL store for time tracking.",
+  "modules": ["./register.tsx"],
   "hooks": {
     "SessionStart": [
       {

@@ -707,11 +707,16 @@ def _hhmm(ts):
     return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
-def build_status(sdir, session_id="", project="", brief=False, now=None):
+def build_status(sdir, session_id="", project="", brief=False, now=None, as_json=False):
     """One-glance answer to: am I tracked, am I paused, how much today?
 
     The querying user is present right now, so their open session is extended
     to `now` with a synthetic in-memory heartbeat (nothing is written).
+
+    `as_json` returns the brief line plus this session's open pause as JSON,
+    for the hooks module's status entry and paused band. Clock times are
+    formatted here because the module's environment may not know the local
+    timezone.
     """
     now = datetime.now().timestamp() if now is None else now
     today = datetime.fromtimestamp(now).date()
@@ -739,12 +744,35 @@ def build_status(sdir, session_id="", project="", brief=False, now=None):
 
     paused = session_pause_state(events, session_id, now) if session_id else None
 
-    if brief:
+    if paused:
+        _, until = paused
+        tail = f" until {_hhmm(until)}" if until else ""
+        brief_line = f"⏸ paused{tail} · {fmt_hm(total)} today"
+    else:
+        brief_line = f"⏱ {fmt_hm(total)} today"
+
+    if as_json:
+        pause = None
         if paused:
-            _, until = paused
-            tail = f" until {_hhmm(until)}" if until else ""
-            return f"⏸ paused{tail} · {fmt_hm(total)} today"
-        return f"⏱ {fmt_hm(total)} today"
+            pts, until = paused
+            reason = next(
+                (
+                    e.get("reason")
+                    for e in sess
+                    if e.get("event") == "pause" and e["ts"] == pts
+                ),
+                None,
+            )
+            pause = {
+                "since": _hhmm(pts),
+                "until": _hhmm(until) if until else None,
+                "untilTs": until,
+                "reason": reason or None,
+            }
+        return json.dumps({"line": brief_line, "paused": pause}, ensure_ascii=False)
+
+    if brief:
+        return brief_line
 
     mapping = projects.get(project, {})
     if not project:
@@ -846,10 +874,19 @@ def main(argv=None):
     parser.add_argument("--session", default="", help="Session id (used by --status).")
     parser.add_argument("--project", default="", help="Current project path (used by --status).")
     parser.add_argument("--brief", action="store_true", help="One-line --status output (for statuslines).")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="--status as JSON: the brief line and this session's open pause (for the hooks module).",
+    )
     args = parser.parse_args(argv)
 
     if args.status:
-        print(build_status(store_dir(args.dir), args.session, args.project, args.brief))
+        print(
+            build_status(
+                store_dir(args.dir), args.session, args.project, args.brief, as_json=args.json
+            )
+        )
         return 0
 
     if args.month and (args.date_from or args.date_to):

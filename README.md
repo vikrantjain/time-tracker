@@ -9,6 +9,7 @@ Capture is passive (hooks). Reporting and corrections are on demand and cost **n
 - **Claude Code** with plugin support (the plugin is loaded via `/plugin`).
 - **`python3`** (3.11+, for `tomllib`) on `PATH` — the report engine and helpers are stdlib-only, no `pip install`.
 - **`jq`** on `PATH` — the capture hook and dispatcher use it to read/write the JSONL store.
+- For the [status entry and paused band](#status-entry-and-paused-band) only: a Claude Code build that loads hooks modules. That API is early access. It has been tested on 2.1.296 and 2.1.300. Capture, reports and `tt` commands do not depend on it.
 
 > Both `python3` and `jq` must be installed **before** you enable the plugin. The hooks **fail open**: if `jq` is missing they exit quietly rather than erroring, so tracking would silently record nothing. Verify with `python3 --version` and `jq --version`, then run `tt status` after enabling to confirm capture is live.
 
@@ -49,11 +50,12 @@ That's the whole loop. Everything below is detail on how it works and the full c
 
 ## How it works
 
-Three layers:
+Four layers:
 
 1. **Capture hook** (`hooks/scripts/track-event.sh`) — fires on `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, and `SessionEnd`, appending one **metadata-only** JSON line per event. No prompt or response text is ever stored. The `PostToolUse` (`tool`) heartbeat exists so a long autonomous turn — where minutes pass between your prompt and Claude's stop — still counts as active engagement.
 2. **JSONL store** — an append-only log keyed by absolute project path, **rotated monthly** so no single file grows forever. Heartbeats are **throttled** (at most one per session per 60s for prompt/stop, per 300s for tool activity) — the idle threshold works at minutes scale, so sub-minute precision would be pure log bloat. Session boundaries and pause/resume markers are never throttled.
 3. **Report engine** (`scripts/report.py`, stdlib-only Python 3) — derives wall-clock and active-engagement at report time, loading only the monthly files that overlap the requested date range.
+4. **On-screen view** (`hooks/register.tsx`, a Claude Code hooks module) — shows the [status entry and paused band](#status-entry-and-paused-band). It only reads the store, through `report.py --status --json`. Its one action, Resume, runs the same dispatcher as a typed `tt resume`.
 
 ### The two metrics
 
@@ -161,9 +163,27 @@ Both forms share one dispatcher (`scripts/tt-dispatch.sh`), so behavior is ident
 
 > **Escape:** to send a real prompt that legitimately begins with `tt `, prefix it with a backslash — e.g. `\tt is the abbreviation I mean`. The plugin will not intercept it and it reaches the model normally.
 
-## Statusline (optional)
+## Status entry and paused band
 
-To see today's tracked time passively instead of asking, wire the bundled segment into Claude Code's statusline in `~/.claude/settings.json`:
+In an interactive session the plugin shows today's tracked time under the prompt, with nothing to configure:
+
+```
+⏱ 3h 12m today
+```
+
+It refreshes every minute and after every prompt. If `python3` is missing or the report engine fails, it says `⏱ time-tracker: status unavailable` instead of going blank.
+
+While the session is paused, a band above the prompt says so:
+
+```
+⏸ Time tracking paused since 12:20 · auto-resumes 13:05 · lunch [ Resume ]
+```
+
+**Resume** does exactly what typing `tt resume` does. The band goes away when you resume, send a prompt, or a timed pause runs out.
+
+### Statusline segment (optional)
+
+If you run your own `statusLine` command and want the time in it, wire the bundled segment into `~/.claude/settings.json`. If you wired it before the status entry existed, you can remove it: the entry shows the same line.
 
 ```json
 {
@@ -178,4 +198,4 @@ It prints `⏱ 3h 12m today` (or `⏸ paused until 13:05 · 2h 41m today` while 
 
 ## Status
 
-Feature-complete: passive capture (with heartbeat throttling and monthly log rotation), wall-clock + active-engagement reporting (period shorthands, humanized tables, CSV/file export), `tt status`, customer mapping via `tt map`, pause/resume with timed pauses, manual time entry with backfill and undo, an optional statusline segment, and the model-free `tt` command set with typo suggestions. Tests live in `tests/` (report engine, dispatcher, and capture hook).
+Feature-complete: passive capture (with heartbeat throttling and monthly log rotation), wall-clock + active-engagement reporting (period shorthands, humanized tables, CSV/file export), `tt status`, customer mapping via `tt map`, pause/resume with timed pauses, manual time entry with backfill and undo, a status entry and paused band (plus an optional statusline segment), and the model-free `tt` command set with typo suggestions. Tests live in `tests/` (report engine, dispatcher, capture hook, and hooks module).

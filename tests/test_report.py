@@ -835,6 +835,54 @@ class Status(unittest.TestCase):
         ]
         self.assertIsNone(report.session_pause_state(evs, "s", ts(2026, 3, 4, 10, 45)))
 
+    def test_json_not_paused(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 5)),
+        ])
+        out = json.loads(
+            report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 11, 0), as_json=True)
+        )
+        self.assertEqual(out, {"line": "⏱ 1h today", "paused": None})
+
+    def test_json_timed_pause_carries_times_and_reason(self):
+        until = ts(2026, 3, 4, 11, 15)
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30), until=until, reason="lunch"),
+        ])
+        out = json.loads(
+            report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 11, 0), as_json=True)
+        )
+        self.assertEqual(out["line"], "⏸ paused until 11:15 · 30m today")
+        self.assertEqual(
+            out["paused"],
+            {"since": "10:30", "until": "11:15", "untilTs": until, "reason": "lunch"},
+        )
+
+    def test_json_untimed_pause_without_reason(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30)),
+        ])
+        out = json.loads(
+            report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 11, 0), as_json=True)
+        )
+        self.assertEqual(
+            out["paused"], {"since": "10:30", "until": None, "untilTs": None, "reason": None}
+        )
+
+    def test_json_expired_pause_reads_as_not_paused(self):
+        d = self._store([
+            ev("session_start", "s", ts(2026, 3, 4, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 4, 10, 30), until=ts(2026, 3, 4, 10, 40)),
+        ])
+        out = json.loads(
+            report.build_status(d, "s", "/p/alpha", now=ts(2026, 3, 4, 11, 0), as_json=True)
+        )
+        self.assertIsNone(out["paused"])
+
 
 class RenderingUX(unittest.TestCase):
     def test_fmt_hm(self):
