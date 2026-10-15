@@ -95,5 +95,30 @@ out="$(printf '{"session_id":"s1","cwd":"/proj/demo","prompt":"tt help"}' | bash
 check "sentinel emits block" "block" "$(printf '%s' "$out" | jq -r '.decision')"
 check "sentinel not recorded" "" "$(lines)"
 
+# 10. Metadata only: the prompt text never reaches the store.
+new_store
+seed session_start s1 -120
+fire prompt s1 >/dev/null
+check "prompt recorded"            "2" "$(lines)"
+check "prompt text never stored"   "" "$(grep 'hello world' "$efile" || true)"
+
+# 11. An escaped \tt prompt is not a sentinel: no block, recorded as a prompt.
+new_store
+out="$(printf '{"session_id":"s1","cwd":"/proj/demo","prompt":"\\\\tt is the word"}' | bash "$track" prompt)"
+check "escaped tt not blocked" "" "$out"
+check "escaped tt recorded"    "prompt" "$(jq -r '.event' "$efile" 2>/dev/null | tail -1)"
+
+# 12. The /time-tracker:tt slash command is intercepted; another plugin's
+#     `tt` and other commands pass through untouched.
+expand="$root/hooks/scripts/track-expansion.sh"
+new_store
+out="$(printf '{"session_id":"s1","cwd":"/proj/demo","command_name":"time-tracker:tt","command_args":"help"}' | bash "$expand")"
+check "slash tt blocks"          "block" "$(printf '%s' "$out" | jq -r '.decision')"
+out="$(printf '{"session_id":"s1","cwd":"/proj/demo","command_name":"other-plugin:tt","command_args":"help"}' | bash "$expand")"
+check "other plugin's tt passes" "" "$out"
+out="$(printf '{"session_id":"s1","cwd":"/proj/demo","command_name":"commit","command_args":""}' | bash "$expand")"
+check "other command passes"     "" "$out"
+check "expansion records nothing" "" "$(lines)"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

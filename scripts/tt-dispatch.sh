@@ -43,6 +43,17 @@ sys.stdout.write("".join(t + "\0" for t in toks))
 ' "$1" 2>/dev/null || true
 }
 
+# Tokenize "$1" into the global array `toks`. A read loop, not `mapfile -d`:
+# macOS ships bash 3.2, which has no mapfile. Without it every verb would run
+# with no arguments, and `tt report --month ...` would silently ignore the filter.
+split_args() {
+  local t
+  toks=()
+  while IFS= read -r -d '' t; do
+    toks+=("$t")
+  done < <(tokenize "$1")
+}
+
 # Append one metadata-only event line (used by pause/resume markers).
 # An optional second arg is a JSON object merged into the line (e.g. a timed
 # pause's {"until": ...}).
@@ -68,7 +79,7 @@ append_event() {
 # paused. Reads only the current month's tail — a miss fails open (the caller
 # behaves as if not paused, which at worst records a harmless extra marker).
 pause_state() {
-  local recent ts ev until state=""
+  local recent ts ev until p_ts="" p_until="-"
   [ -n "${TT_SESSION_ID:-}" ] || return 0
   [ -f "$events_file" ] || return 0
   recent="$(tail -n 200 "$events_file" 2>/dev/null \
@@ -79,21 +90,40 @@ pause_state() {
   [ -n "$recent" ] || return 0
   while read -r ts ev until; do
     case "$ev" in
-      pause) [ -z "$state" ] && state="$ts $until" ;;
-      resume|prompt|session_end) state="" ;;
+      pause)
+        # A pause after an open timed pause ran out replaces it, as in
+        # compute_suppressed (report.py).
+        if [ -n "$p_ts" ] && [ "$p_until" != "-" ] && [ "$ts" -ge "$p_until" ] 2>/dev/null; then
+          p_ts=""
+        fi
+        if [ -z "$p_ts" ]; then
+          p_ts="$ts"
+          p_until="$until"
+        fi
+        ;;
+      resume|prompt|session_end) p_ts="" ;;
     esac
   done <<< "$recent"
-  if [ -n "$state" ]; then
-    set -- $state
-    # A timed pause expires on its own once `until` passes.
-    if [ "$2" != "-" ] && [ "$now_ts" -ge "$2" ] 2>/dev/null; then
-      state=""
-    fi
+  [ -n "$p_ts" ] || return 0
+  # A timed pause expires on its own once `until` passes.
+  if [ "$p_until" != "-" ] && [ "$now_ts" -ge "$p_until" ] 2>/dev/null; then
+    return 0
   fi
-  printf '%s' "$state"
+  printf '%s %s' "$p_ts" "$p_until"
 }
 
-hhmm() { date -d "@$1" +%H:%M 2>/dev/null || printf '?'; }
+# Date helpers use python3, not `date -d`. GNU and BSD (macOS) date disagree
+# on -d, and python3 is already required.
+hhmm() {
+  python3 -c 'import sys, datetime; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).strftime("%H:%M"))' \
+    "$1" 2>/dev/null || printf '?'
+}
+
+# Echo a YYYY-MM-DD date back when it is a real date; nothing otherwise.
+canonical_date() {
+  python3 -c 'import sys, datetime; print(datetime.date.fromisoformat(sys.argv[1]).isoformat())' \
+    "$1" 2>/dev/null || true
+}
 
 # Print a hook block response (no model turn, user-facing message) and exit.
 emit_block() {
@@ -105,8 +135,8 @@ emit_block() {
 
 case "$action" in
   report)
-    mapfile -d '' -t rargs < <(tokenize "$rest")
-    out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" "${rargs[@]}" 2>&1)"
+    split_args "$rest"
+    out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/report.py" --dir "$store_dir" "${toks[@]}" 2>&1)"
     [ -z "$out" ] && out="(no output)"
     emit_block "$out"
     ;;
@@ -118,7 +148,8 @@ case "$action" in
     #              cwd the command was invoked from), exactly like a session.
     #   --on     : the local date the work happened (backfill); default today.
     #   note     : everything else (quoting optional); joined with spaces.
-    mapfile -d '' -t aargs < <(tokenize "$rest")
+    split_args "$rest"
+    aargs=("${toks[@]}")
     dur="${aargs[0]:-}"
     if [ -z "$dur" ]; then
       emit_block "Usage: tt add <duration> [--to <project-or-customer>] [--on <YYYY-MM-DD>] [note]  (e.g. tt add 2h \"fixed login bug\"  |  tt add 30m --to \"Acme Corp\" --on 2026-07-03 kickoff call)"
@@ -162,7 +193,7 @@ case "$action" in
         emit_block "tt add: --on needs a date (YYYY-MM-DD)."
       fi
       if ! [[ "$on_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
-         || [ "$(date -d "$on_date" +%F 2>/dev/null)" != "$on_date" ]; then
+         || [ "$(canonical_date "$on_date")" != "$on_date" ]; then
         emit_block "tt add: '--on $on_date' isn't a valid date. Use YYYY-MM-DD (e.g. --on 2026-07-03)."
       fi
     fi
@@ -194,7 +225,10 @@ case "$action" in
     [ -n "$record" ] && printf '%s\n' "$record" >> "$manual_file" 2>/dev/null || true
     where="$target"
     [ "$defaulted" -eq 1 ] && where="$target (current project)"
-    msg="✎ Recorded ${dur} to '${where}'${on_date:+ on ${on_date}}${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
+    # A bare number is hours here but minutes for `tt pause`. Say which.
+    shown="$dur"
+    [[ "$dur" =~ ^-?([0-9]+\.?[0-9]*|\.[0-9]+)$ ]] && shown="${dur} (= ${dur}h)"
+    msg="✎ Recorded ${shown} to '${where}'${on_date:+ on ${on_date}}${note:+ — ${note}} (manual, billable; excluded from active-engagement)."
     # Show the verbatim stored line so the user can confirm the entry is right.
     [ -n "$record" ] && msg="${msg}
   saved: ${record}"
@@ -204,9 +238,9 @@ case "$action" in
     # map [<customer>] [--name <label>] [--list] — map the CURRENT project to
     # a customer in projects.toml (hand-edits are preserved); bare form lists.
     # map --remove [<path>] drops the current project's (or <path>'s) mapping.
-    mapfile -d '' -t margs < <(tokenize "$rest")
+    split_args "$rest"
     out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/tt-map.py" --dir "$store_dir" \
-      --project "${TT_PROJECT:-}" "${margs[@]}" 2>&1)"
+      --project "${TT_PROJECT:-}" "${toks[@]}" 2>&1)"
     [ -z "$out" ] && out="(map unavailable)"
     emit_block "$out"
     ;;
@@ -247,6 +281,11 @@ print(json.dumps(entries[-1]) if entries else "")
     # The engine suppresses the span until resume / next prompt / session end;
     # a duration (bare number = minutes) additionally caps it at now+duration,
     # so a forgotten 'tt resume' can't eat the afternoon.
+    if [ -z "${TT_SESSION_ID:-}" ]; then
+      # A marker with no session id pauses nothing. This happens when the
+      # model runs the dispatcher from the /time-tracker:tt fallback.
+      emit_block "tt pause: no session to pause here. Type 'tt pause' at the Claude Code prompt."
+    fi
     cur="$(pause_state)"
     if [ -n "$cur" ]; then
       set -- $cur
@@ -254,7 +293,8 @@ print(json.dumps(entries[-1]) if entries else "")
       [ "$2" != "-" ] && tail_msg=", auto-resumes $(hhmm "$2")"
       emit_block "⏸ Already paused (since $(hhmm "$1")${tail_msg}). Resume with 'tt resume' or just send a prompt."
     fi
-    mapfile -d '' -t pargs < <(tokenize "$rest")
+    split_args "$rest"
+    pargs=("${toks[@]}")
     until_ts=""
     reason_txt=""
     pause_dur_re='^([0-9]+\.?[0-9]*|\.[0-9]+)[smh]?$'
@@ -283,6 +323,9 @@ print(int(float(num) * mult))
     emit_block "⏸ Tracking paused for this session${reason_txt:+ — ${reason_txt}}. Resume with 'tt resume' (or '/time-tracker:tt resume'), or just send your next prompt."
     ;;
   resume)
+    if [ -z "${TT_SESSION_ID:-}" ]; then
+      emit_block "tt resume: no session to resume here. Type 'tt resume' at the Claude Code prompt."
+    fi
     cur="$(pause_state)"
     # The marker is recorded either way: if the pause predates this month's
     # log tail the state check can miss it, and a stray resume is harmless.

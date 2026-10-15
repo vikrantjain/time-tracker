@@ -3,8 +3,8 @@
 
 Backs the `tt map` verb. The mapping file stays hand-editable: adding a NEW
 project appends a table and leaves the rest of the file byte-for-byte intact
-(comments included); updating or removing an EXISTING project touches only
-that table's lines. Stdlib only.
+(comments included). Remapping an EXISTING project changes only its customer
+and name lines. Removing one deletes only that table's lines. Stdlib only.
 """
 
 import argparse
@@ -30,6 +30,15 @@ def load(path):
         return None
 
 
+def write_atomic(path, text):
+    """Replace the file in one step. A report that reads it mid-write would
+    otherwise see half a mapping and show every project as unmapped."""
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+
+
 def render_table(project, customer, name):
     lines = [f'["{toml_escape(project)}"]', f'customer = "{toml_escape(customer)}"']
     if name:
@@ -49,6 +58,14 @@ def _header_matches(line, project):
     if inner.startswith("'") and inner.endswith("'") and len(inner) >= 2:
         return inner[1:-1] == project
     return inner == project
+
+
+def _key_of(line):
+    """The bare key a `key = value` line sets, or None for anything else."""
+    s = line.strip()
+    if not s or s.startswith("#") or "=" not in s:
+        return None
+    return s.split("=", 1)[0].strip().strip("\"'")
 
 
 def _table_span(lines, project):
@@ -88,25 +105,34 @@ def upsert(path, project, customer, name):
             text += "\n"
         if text:
             text += "\n"
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(text + table)
+        write_atomic(path, text + table)
         label = f'"{customer}"' + (f" (name: {name})" if name else "")
         return f"✓ Mapped {project} → {label}\n  stored in {path}"
 
-    # Rewrite just this project's table; every other line stays verbatim.
+    was = existing.get("customer", "?")
+    if was == customer and (not name or existing.get("name") == name):
+        return f"Already mapped: {project} → \"{customer}\" (nothing changed)."
+
+    # Change only the customer line, and the name line when --name is given.
+    # Other keys and comments in the table stay as they are.
     with open(path, "r", encoding="utf-8") as fh:
         lines = fh.readlines()
     span = _table_span(lines, project)
     if span is None:
         return f"tt map: couldn't find the table for {project} in {path}. Edit it by hand."
     start, end = span
-    lines[start:end] = [table]
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.writelines(lines)
-    was = existing.get("customer", "?")
+    keyed = {_key_of(lines[i]): i for i in range(start + 1, end) if _key_of(lines[i])}
+    if "customer" not in keyed:
+        return f"tt map: couldn't find the customer line for {project} in {path}. Edit it by hand."
+    lines[keyed["customer"]] = f'customer = "{toml_escape(customer)}"\n'
+    if name:
+        name_line = f'name = "{toml_escape(name)}"\n'
+        if "name" in keyed:
+            lines[keyed["name"]] = name_line
+        else:
+            lines.insert(keyed["customer"] + 1, name_line)
+    write_atomic(path, "".join(lines))
     label = f'"{customer}"' + (f" (name: {name})" if name else "")
-    if was == customer and not name:
-        return f"Already mapped: {project} → \"{customer}\" (nothing changed)."
     return f"✓ Updated {project} → {label} (was \"{was}\")"
 
 
@@ -132,8 +158,7 @@ def remove(path, project):
         del lines[start - 1]
     elif start == 0 and lines and lines[0].strip() == "":
         del lines[0]
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.writelines(lines)
+    write_atomic(path, "".join(lines))
     was = existing.get("customer", "?")
     return (
         f"✓ Removed the mapping for {project} (was \"{was}\").\n"

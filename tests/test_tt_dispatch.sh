@@ -327,5 +327,82 @@ contains "statusline shows today" "today" "$out"
 out="$(printf '{}' | TIME_TRACKER_DIR="$(mktemp -d)" bash "$root/scripts/statusline.sh")"
 contains "statusline never blank" "⏱" "$out"
 
+# 31. A pause after an expired timed pause takes hold: status and the
+#     dispatcher both see it, and a third pause is refused.
+new_store
+export TT_SESSION_ID="sp3" TT_PROJECT="/proj/acme-api"
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+now="$(date +%s)"
+printf '{"ts":%s,"event":"session_start","session_id":"sp3","project":"/proj/acme-api"}\n{"ts":%s,"event":"pause","session_id":"sp3","project":"/proj/acme-api","until":%s}\n' \
+  "$(( now - 3600 ))" "$(( now - 1200 ))" "$(( now - 900 ))" >> "$month_file"
+bash "$dispatch" "pause 1h meeting" >/dev/null
+out="$(bash "$dispatch" "status" | jq -r '.reason')"
+contains "re-pause shows in status" "session: ⏸ paused since" "$out"
+out="$(bash "$dispatch" "pause" | jq -r '.reason')"
+contains "re-pause blocks a third" "Already paused" "$out"
+
+# 32. pause/resume without a session id refuse and write nothing.
+new_store
+month_file="$TIME_TRACKER_DIR/events-$(date +%Y-%m).jsonl"
+out="$(TT_SESSION_ID= bash "$dispatch" "pause 30m" | jq -r '.reason')"
+contains "pause needs a session" "no session to pause" "$out"
+out="$(TT_SESSION_ID= bash "$dispatch" "resume" | jq -r '.reason')"
+contains "resume needs a session" "no session to resume" "$out"
+check "no marker without a session" "no" "$([ -s "$month_file" ] && echo yes || echo no)"
+
+# 33. A bare-number tt add says it was read as hours.
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" "add 2 pairing" | jq -r '.reason')"
+contains "bare number shown as hours" "Recorded 2 (= 2h)" "$out"
+out="$(bash "$dispatch" "add 90m pairing" | jq -r '.reason')"
+contains "suffixed duration unchanged" "Recorded 90m to" "$out"
+
+# 34. Remapping to the same customer keeps the name and other keys and
+#     writes nothing.
+new_store
+export TT_PROJECT="/proj/a"
+printf '["/proj/a"]\ncustomer = "Acme"\n# billed monthly\nname = "Acme Web"\nrate = 150\n' \
+  > "$TIME_TRACKER_DIR/projects.toml"
+before="$(cat "$TIME_TRACKER_DIR/projects.toml")"
+out="$(bash "$dispatch" 'map "Acme"' | jq -r '.reason')"
+contains "same customer is a no-op" "nothing changed" "$out"
+check "same customer leaves file as is" "$before" "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+
+# 35. Remapping to a new customer changes only the customer line; --name
+#     replaces the name line.
+bash "$dispatch" 'map "Beta"' >/dev/null
+check "remap changes only the customer line" \
+  "$(printf '["/proj/a"]\ncustomer = "Beta"\n# billed monthly\nname = "Acme Web"\nrate = 150')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+out="$(bash "$dispatch" 'map "Beta" --name "Beta Web"' | jq -r '.reason')"
+contains "name-only change is an update" "Updated /proj/a" "$out"
+check "--name replaces the name line" \
+  "$(printf '["/proj/a"]\ncustomer = "Beta"\n# billed monthly\nname = "Beta Web"\nrate = 150')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+check "no temp file left behind" "" "$(ls "$TIME_TRACKER_DIR" | grep tmp || true)"
+
+# 36. --name on a table with no name line adds one under customer.
+printf '["/proj/c"]\ncustomer = "C"\nrate = 90\n' > "$TIME_TRACKER_DIR/projects.toml"
+export TT_PROJECT="/proj/c"
+bash "$dispatch" 'map "C" --name "Cee"' >/dev/null
+check "--name inserted under customer" \
+  "$(printf '["/proj/c"]\ncustomer = "C"\nname = "Cee"\nrate = 90')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+
+# 37. A bad report flag answers in one line, not a traceback.
+new_store
+out="$(bash "$dispatch" "report --month May" | jq -r '.reason')"
+contains "bad month explained" "isn't a month" "$out"
+check "no traceback" "" "$(printf '%s' "$out" | grep Traceback || true)"
+
+# 38. --on still validates real calendar dates (now via python3, not date -d).
+new_store
+export TT_PROJECT="/proj/acme-api"
+out="$(bash "$dispatch" "add 1h --on 2026-02-30 x" | jq -r '.reason')"
+contains "impossible date rejected" "isn't a valid date" "$out"
+out="$(bash "$dispatch" "add 1h --on 2026-02-28 x" | jq -r '.reason')"
+contains "real date accepted" "on 2026-02-28" "$out"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

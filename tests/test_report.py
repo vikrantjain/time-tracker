@@ -23,6 +23,16 @@ def ev(event, sid, t, project="/p/alpha", **extra):
     return out
 
 
+def worked(sid, start, end, project="/p/alpha"):
+    """A session active from start to end: it closes right after a heartbeat,
+    so the idle-tail cap does not trim it."""
+    return [
+        ev("session_start", sid, start, project=project),
+        ev("stop", sid, end, project=project),
+        ev("session_end", sid, end, project=project),
+    ]
+
+
 def write_log(events):
     fd, path = tempfile.mkstemp(suffix=".jsonl")
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -42,11 +52,74 @@ class Segmentation(unittest.TestCase):
             ev("session_start", "s", ts(2026, 3, 2, 10, 0), source="startup"),
             ev("prompt", "s", ts(2026, 3, 2, 10, 10)),
             ev("stop", "s", ts(2026, 3, 2, 10, 20)),
-            ev("session_end", "s", ts(2026, 3, 2, 11, 0), reason="exit"),
+            ev("session_end", "s", ts(2026, 3, 2, 10, 30), reason="exit"),
         ]
         ivs = report.build_intervals(evs)
         self.assertEqual(len(ivs), 1)
-        self.assertEqual(ivs[0]["end"] - ivs[0]["start"], 3600)
+        self.assertEqual(ivs[0]["end"] - ivs[0]["start"], 1800)
+
+    def test_idle_tail_before_session_end_is_capped(self):
+        # Left open over the weekend, closed on Monday: billed to 15m past the
+        # last heartbeat, not to the close.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 6, 17, 0), source="startup"),
+            ev("stop", "s", ts(2026, 3, 6, 17, 30)),
+            ev("session_end", "s", ts(2026, 3, 9, 9, 0), reason="exit"),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(ivs[0]["end"] - ivs[0]["start"], 45 * 60)
+
+    def test_capped_idle_tail_is_not_engaged(self):
+        # Closed 3h after the last heartbeat: wall-clock keeps 15m of tail,
+        # but none of the tail counts as engaged.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 10)),
+            ev("session_end", "s", ts(2026, 3, 2, 13, 10)),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(project_seconds(ivs), {"/p/alpha": 25 * 60})
+        self.assertEqual(project_engagement(ivs, 15 * 60), {"/p/alpha": 10 * 60})
+        # A threshold longer than the tail still cannot push engagement past
+        # wall-clock.
+        self.assertEqual(project_engagement(ivs, 4 * 3600), {"/p/alpha": 25 * 60})
+
+    def test_idle_tail_cap_ignores_idle_threshold_flag(self):
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("stop", "s", ts(2026, 3, 2, 10, 30)),
+            ev("session_end", "s", ts(2026, 3, 2, 12, 0)),
+        ]
+        path = write_log(evs)
+        try:
+            short = report.build_report(path, idle_threshold=60, as_csv=True)
+            long_ = report.build_report(path, idle_threshold=3 * 3600, as_csv=True)
+        finally:
+            os.remove(path)
+        # Wall-clock is 45m (0.75h) under both thresholds.
+        self.assertIn(",0.75,", short)
+        self.assertIn(",0.75,", long_)
+
+    def test_compaction_continues_the_interval(self):
+        # A compaction mid-turn reuses the session id. It must not split the
+        # interval and drop the time since the last (throttled) heartbeat.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0), source="startup"),
+            ev("tool", "s", ts(2026, 3, 2, 10, 10)),
+            ev("session_start", "s", ts(2026, 3, 2, 10, 14, 50), source="compact"),
+            ev("session_end", "s", ts(2026, 3, 2, 10, 20)),
+        ]
+        ivs = report.build_intervals(evs)
+        self.assertEqual(len(ivs), 1)
+        self.assertEqual(project_seconds(ivs), {"/p/alpha": 1200})
+
+    def test_compaction_without_open_interval_opens_one(self):
+        # The startup event fell outside the loaded months.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0), source="compact"),
+            ev("stop", "s", ts(2026, 3, 2, 10, 20)),
+        ]
+        self.assertEqual(project_seconds(report.build_intervals(evs)), {"/p/alpha": 1200})
 
     def test_missing_session_end_closes_at_last_heartbeat(self):
         # No session_end, end of log -> close at last heartbeat (stop @10:20).
@@ -78,23 +151,19 @@ class Segmentation(unittest.TestCase):
 
 class UnionAndBuckets(unittest.TestCase):
     def test_overlapping_concurrent_sessions_union_not_sum(self):
-        evs = [
-            ev("session_start", "a", ts(2026, 3, 2, 10, 0)),
-            ev("session_end", "a", ts(2026, 3, 2, 11, 0)),       # [10:00,11:00]
-            ev("session_start", "b", ts(2026, 3, 2, 10, 30)),
-            ev("session_end", "b", ts(2026, 3, 2, 11, 30)),      # [10:30,11:30]
-        ]
+        evs = (
+            worked("a", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0))      # [10:00,11:00]
+            + worked("b", ts(2026, 3, 2, 10, 30), ts(2026, 3, 2, 11, 30))  # [10:30,11:30]
+        )
         ivs = report.build_intervals(evs)
         # union = [10:00,11:30] = 1.5h, NOT 2h.
         self.assertEqual(project_seconds(ivs), {"/p/alpha": 5400})
 
     def test_separate_projects_not_unioned(self):
-        evs = [
-            ev("session_start", "a", ts(2026, 3, 2, 10, 0), project="/p/alpha"),
-            ev("session_end", "a", ts(2026, 3, 2, 11, 0), project="/p/alpha"),
-            ev("session_start", "b", ts(2026, 3, 2, 10, 0), project="/p/beta"),
-            ev("session_end", "b", ts(2026, 3, 2, 11, 0), project="/p/beta"),
-        ]
+        evs = (
+            worked("a", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/alpha")
+            + worked("b", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/beta")
+        )
         ivs = report.build_intervals(evs)
         self.assertEqual(project_seconds(ivs), {"/p/alpha": 3600, "/p/beta": 3600})
 
@@ -108,10 +177,7 @@ class UnionAndBuckets(unittest.TestCase):
 
     def test_interval_crossing_local_midnight_is_split(self):
         # 23:30 -> 00:30 next day: 30 min each side.
-        evs = [
-            ev("session_start", "s", ts(2026, 3, 2, 23, 30)),
-            ev("session_end", "s", ts(2026, 3, 3, 0, 30)),
-        ]
+        evs = worked("s", ts(2026, 3, 2, 23, 30), ts(2026, 3, 3, 0, 30))
         ivs = report.build_intervals(evs)
         wc = report.wall_clock_by_project_day(ivs)
         days = wc["/p/alpha"]
@@ -229,12 +295,10 @@ def write_projects_toml(text):
 
 class CustomerMapping(unittest.TestCase):
     def _two_project_log(self):
-        return [
-            ev("session_start", "a", ts(2026, 3, 2, 10, 0), project="/p/acme"),
-            ev("session_end", "a", ts(2026, 3, 2, 11, 0), project="/p/acme"),
-            ev("session_start", "b", ts(2026, 3, 2, 10, 0), project="/p/beta"),
-            ev("session_end", "b", ts(2026, 3, 2, 11, 0), project="/p/beta"),
-        ]
+        return (
+            worked("a", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/acme")
+            + worked("b", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/beta")
+        )
 
     def test_missing_projects_toml_all_unmapped(self):
         self.assertEqual(report.load_projects("/nonexistent.toml"), {})
@@ -294,14 +358,11 @@ class CustomerMapping(unittest.TestCase):
 class FiltersAndCsv(unittest.TestCase):
     def _multi_day_multi_customer(self):
         # acme on 2026-03-02 (1h) and 2026-03-10 (2h); beta on 2026-03-02 (1h).
-        return [
-            ev("session_start", "a1", ts(2026, 3, 2, 10, 0), project="/p/acme"),
-            ev("session_end", "a1", ts(2026, 3, 2, 11, 0), project="/p/acme"),
-            ev("session_start", "a2", ts(2026, 3, 10, 9, 0), project="/p/acme"),
-            ev("session_end", "a2", ts(2026, 3, 10, 11, 0), project="/p/acme"),
-            ev("session_start", "b1", ts(2026, 3, 2, 14, 0), project="/p/beta"),
-            ev("session_end", "b1", ts(2026, 3, 2, 15, 0), project="/p/beta"),
-        ]
+        return (
+            worked("a1", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/acme")
+            + worked("a2", ts(2026, 3, 10, 9, 0), ts(2026, 3, 10, 11, 0), project="/p/acme")
+            + worked("b1", ts(2026, 3, 2, 14, 0), ts(2026, 3, 2, 15, 0), project="/p/beta")
+        )
 
     def _projects(self):
         toml = (
@@ -463,19 +524,65 @@ class PauseResume(unittest.TestCase):
     def test_pause_attributed_to_project_at_pause_time(self):
         # One session, resumed under a different cwd: the pause typed in the
         # second sub-interval must be subtracted from the SECOND project.
-        evs = [
-            ev("session_start", "s", ts(2026, 3, 2, 10, 0), project="/p/alpha"),
-            ev("session_end", "s", ts(2026, 3, 2, 11, 0), project="/p/alpha"),
+        evs = worked("s", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/alpha") + [
             ev("session_start", "s", ts(2026, 3, 2, 12, 0), project="/p/beta"),
             ev("prompt", "s", ts(2026, 3, 2, 12, 0), project="/p/beta"),
             ev("pause", "s", ts(2026, 3, 2, 12, 10), project="/p/beta"),
             ev("resume", "s", ts(2026, 3, 2, 12, 40), project="/p/beta"),
+            ev("stop", "s", ts(2026, 3, 2, 13, 0), project="/p/beta"),
             ev("session_end", "s", ts(2026, 3, 2, 13, 0), project="/p/beta"),
         ]
-        self.assertEqual(set(report.compute_suppressed(evs)), {"/p/beta"})
         wc, _ = self._wc_eng(evs)
         # alpha keeps its full hour; beta loses the 30-min pause.
         self.assertEqual(wc, {"/p/alpha": 3600, "/p/beta": 1800})
+
+    def test_pause_does_not_touch_a_concurrent_session(self):
+        # Two sessions in one project. A is paused for the hour; B is busy the
+        # whole hour. B's time stays billed.
+        evs = [
+            ev("session_start", "a", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "a", ts(2026, 3, 2, 10, 1)),
+            ev("session_end", "a", ts(2026, 3, 2, 11, 0)),
+            ev("session_start", "b", ts(2026, 3, 2, 10, 0)),
+        ]
+        evs += [ev("prompt", "b", ts(2026, 3, 2, 10, 2 * i)) for i in range(1, 30)]
+        evs += [
+            ev("stop", "b", ts(2026, 3, 2, 11, 0)),
+            ev("session_end", "b", ts(2026, 3, 2, 11, 0)),
+        ]
+        self.assertEqual(set(report.compute_suppressed(evs)), {"a"})
+        wc, eng = self._wc_eng(evs)
+        self.assertEqual(wc, {"/p/alpha": 3600})
+        self.assertEqual(eng, {"/p/alpha": 3600})
+
+    def test_new_pause_after_timed_pause_expired(self):
+        # `tt pause 5m`, back after 10m, `tt pause 1h`. tt commands are not
+        # recorded as prompts, so nothing closed the first pause. The second
+        # one must still count.
+        evs = [
+            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
+            ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 10), until=ts(2026, 3, 2, 10, 15)),
+            ev("pause", "s", ts(2026, 3, 2, 10, 20)),
+            ev("resume", "s", ts(2026, 3, 2, 11, 20)),
+            ev("prompt", "s", ts(2026, 3, 2, 11, 30)),
+            ev("stop", "s", ts(2026, 3, 2, 11, 30)),
+            ev("session_end", "s", ts(2026, 3, 2, 11, 30)),
+        ]
+        self.assertEqual(
+            report.compute_suppressed(evs),
+            {"s": [
+                (ts(2026, 3, 2, 10, 10), ts(2026, 3, 2, 10, 15)),
+                (ts(2026, 3, 2, 10, 20), ts(2026, 3, 2, 11, 20)),
+            ]},
+        )
+        wc, _ = self._wc_eng(evs)
+        self.assertEqual(wc, {"/p/alpha": 90 * 60 - 5 * 60 - 60 * 60})
+        # The status view agrees: the session is paused, since 10:20.
+        self.assertEqual(
+            report.session_pause_state(evs[:4], "s", ts(2026, 3, 2, 10, 30)),
+            (ts(2026, 3, 2, 10, 20), None),
+        )
 
     def test_timed_pause_expires_at_until(self):
         # No resume/prompt ever arrives; suppression still ends at `until`.
@@ -484,6 +591,7 @@ class PauseResume(unittest.TestCase):
             ev("prompt", "s", ts(2026, 3, 2, 10, 0)),
             ev("pause", "s", ts(2026, 3, 2, 10, 30), until=ts(2026, 3, 2, 11, 0)),
             ev("tool", "s", ts(2026, 3, 2, 11, 30)),
+            ev("tool", "s", ts(2026, 3, 2, 12, 0)),
             ev("session_end", "s", ts(2026, 3, 2, 12, 0)),
         ]
         wc, _ = self._wc_eng(evs)
@@ -523,7 +631,7 @@ class PauseResume(unittest.TestCase):
         ]
         sup = report.compute_suppressed(evs)
         self.assertEqual(
-            sup, {"/p/alpha": [(ts(2026, 3, 2, 10, 10), ts(2026, 3, 2, 10, 40))]}
+            sup, {"s": [(ts(2026, 3, 2, 10, 10), ts(2026, 3, 2, 10, 40))]}
         )
 
     def test_subtract_intervals_helper(self):
@@ -647,10 +755,9 @@ class ManualTime(unittest.TestCase):
         self.assertIn("(1.50h)", out)
 
     def test_manual_via_build_report_and_date_filter(self):
-        events = write_log([
-            ev("session_start", "s", ts(2026, 3, 2, 10, 0), project="/p/acme"),
-            ev("session_end", "s", ts(2026, 3, 2, 11, 0), project="/p/acme"),
-        ])
+        events = write_log(
+            worked("s", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 0), project="/p/acme")
+        )
         proj = write_projects_toml('["/p/acme"]\ncustomer = "Acme Corp"\n')
         manual = self._manual_file([
             {"project": "/p/acme", "date": "2026-03-02", "duration": "2h", "note": "in range"},
@@ -723,7 +830,8 @@ class MonthlyRotation(unittest.TestCase):
                 ev("session_start", "s", ts(2026, 3, 31, 23, 0), project="/p/acme")
             ],
             "events-2026-04.jsonl": [
-                ev("session_end", "s", ts(2026, 4, 1, 1, 0), project="/p/acme")
+                ev("stop", "s", ts(2026, 4, 1, 1, 0), project="/p/acme"),
+                ev("session_end", "s", ts(2026, 4, 1, 1, 0), project="/p/acme"),
             ],
         })
         f, t = report.month_range("2026-03")
@@ -762,6 +870,27 @@ class PeriodShorthands(unittest.TestCase):
     def test_cli_rejects_shorthand_plus_month(self):
         with self.assertRaises(SystemExit):
             report.main(["--dir", "/tmp", "today", "--month", "2026-03"])
+
+    def test_cli_bad_values_get_one_line_not_a_traceback(self):
+        import contextlib
+        import io as _io
+
+        cases = [
+            (["--month", "May"], "isn't a month"),
+            (["--month", "2026-13"], "isn't a month"),
+            (["--from", "2026-13-01"], "isn't a date"),
+            (["--to", "soon"], "isn't a date"),
+            (["--idle-threshold", "soon"], "isn't a duration"),
+            (["--idle-threshold=-5m"], "isn't a duration"),
+        ]
+        for argv, want in cases:
+            err = _io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as cm:
+                report.main(["--dir", "/nonexistent"] + argv)
+            self.assertEqual(cm.exception.code, 2, argv)
+            self.assertIn(want, err.getvalue(), argv)
+            self.assertNotIn("usage:", err.getvalue(), argv)
+            self.assertEqual(len(err.getvalue().splitlines()), 1, argv)
 
 
 class Status(unittest.TestCase):
@@ -925,10 +1054,7 @@ class RenderingUX(unittest.TestCase):
         self.assertIn("idle threshold 15m", header)
 
     def test_csv_has_no_header_line_and_keeps_decimal(self):
-        path = write_log([
-            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
-            ev("session_end", "s", ts(2026, 3, 2, 11, 30)),
-        ])
+        path = write_log(worked("s", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 30)))
         try:
             out = report.build_report(path, as_csv=True)
         finally:
@@ -1005,10 +1131,7 @@ class EndToEnd(unittest.TestCase):
             os.remove(path)
 
     def test_markdown_table_renders(self):
-        evs = [
-            ev("session_start", "s", ts(2026, 3, 2, 10, 0)),
-            ev("session_end", "s", ts(2026, 3, 2, 11, 30)),
-        ]
+        evs = worked("s", ts(2026, 3, 2, 10, 0), ts(2026, 3, 2, 11, 30))
         path = write_log(evs)
         try:
             out = report.build_report(path)

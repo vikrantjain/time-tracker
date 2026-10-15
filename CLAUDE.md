@@ -29,7 +29,11 @@ the billing numbers come out wrong and nothing errors.
 - **What closes a pause.** `resume`, `prompt` and `session_end` close a pause. `tool` does not. The
   set appears in `should_throttle` (track-event.sh), `pause_state` (tt-dispatch.sh), and
   `compute_suppressed` and `session_pause_state` (report.py). If throttling drops the prompt that
-  closes a pause, the report suppresses billable time until the session ends. `hooks/register.tsx`
+  closes a pause, the report suppresses billable time until the session ends. A `pause` that
+  arrives after an open timed pause has expired replaces it, in `pause_state`,
+  `compute_suppressed` and `session_pause_state`. If one copy lacks that rule, `tt pause` confirms
+  a pause that the report and the band ignore. `should_throttle` treats every pause as open, which
+  at worst records one extra prompt. `hooks/register.tsx`
   has no copy: it reads pause state from `report.py --status --json`. Keep it that way.
 - **Bare-number durations.** A `tt add` duration is stored as the user typed it, so `2` has no
   unit. `resolve_manual_rows` in report.py reads a bare number as hours. Changing that unit

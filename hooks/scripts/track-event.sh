@@ -27,9 +27,11 @@
 #   ${TIME_TRACKER_DIR:-$HOME/.time-tracker}/events-YYYY-MM.jsonl
 # (report.py also reads the legacy pre-rotation events.jsonl when present.)
 #
-# Concurrent sessions append to the same file. Each line is one small
-# O_APPEND write far below PIPE_BUF, which Linux keeps atomic, so lines from
-# parallel sessions never interleave.
+# Concurrent sessions append to the same file. Each line is one small write
+# with O_APPEND. On a local filesystem the kernel moves to the end of the file
+# and writes in one step, so lines from parallel sessions do not interleave.
+# (PIPE_BUF is the limit for pipes, not files.) NFS gives no such guarantee:
+# keep the store on a local disk.
 #
 # This hook must never break the user's session: it always exits 0 and swallows
 # its own errors (a missing line is preferable to a blocked prompt).

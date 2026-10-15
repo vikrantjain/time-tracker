@@ -12,7 +12,7 @@ This is the **optional, model-driven** path. For a fast, zero-cost report that n
 
 ## Input
 Any arguments are passed straight through as report filters: $ARGUMENTS
-(Supported flags: `--month YYYY-MM`, `--from`/`--to YYYY-MM-DD`, `--customer "<name>"`, `--idle-threshold <dur>`, `--csv`.)
+(Supported: a period word `today`, `yesterday`, `week`, `last-week`, `month` or `last-month`; `--month YYYY-MM`; `--from`/`--to YYYY-MM-DD`; `--customer "<name>"`; `--idle-threshold <dur>`; `--csv`; `--out <path>`.)
 
 ## Instructions
 
@@ -24,13 +24,15 @@ Any arguments are passed straight through as report filters: $ARGUMENTS
 
    The engine reads the store at `$TIME_TRACKER_DIR` (default `~/.time-tracker/`); do not pass `--dir` unless the user specifies a different location.
 
-2. If the output is `No activity recorded.`, tell the user there's nothing tracked for that filter and suggest checking the date range / customer name, or that the plugin may not have been enabled in the relevant project. Then stop.
+2. If the output starts with `No activity`, tell the user there's nothing tracked for that filter. A filtered report also names the date span the store covers; pass that on. Suggest checking the date range and customer name, or that the plugin may not have been enabled in the relevant project. Then stop.
+
+   If the output is a one-line error about a flag (e.g. `isn't a month`), relay it and stop.
 
 3. Otherwise present the table to the user. The wall-clock column is the **billable** number; active-engagement is a productivity sanity-check (wall-clock minus idle gaps). Manual `✎ manual` rows are user-asserted time included in wall-clock but excluded from engagement.
 
 4. Flag anything that needs attention:
-   - Projects shown as `⚠ unmapped` — these have no customer in `projects.toml`. Offer to help the user add the mapping (point them at the `projects.toml` format in the README; you may edit it if they ask).
-   - Large wall-clock vs. small active-engagement gaps — may indicate sessions left open; the user can trim these with `tt pause`/`tt resume` next time, or correct historically with `tt add -<duration> --to <project-or-customer> ...`.
+   - Projects shown as `⚠ unmapped` — these have no customer in `projects.toml`. Suggest the user run `tt map "<Customer>"` inside each one, or `tt map` with no argument to list the existing mappings. Like the corrections below, it is a command the user types.
+   - Large wall-clock vs. small active-engagement gaps — may indicate sessions left open. A session closed after sitting idle is already capped at 15 minutes past its last activity, but an idle stretch in the middle of a session is billed. The user can trim these with `tt pause`/`tt resume` next time, or correct historically with `tt add -<duration> --to <project-or-customer> ...`.
 
 5. Offer correction guidance, but do **not** silently change data. Manual adjustments are the user's call:
    - To add untracked time to the current project: `tt add <duration> [note]`; to another target: `tt add <duration> --to <project-or-customer> [note]`.

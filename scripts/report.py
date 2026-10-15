@@ -14,9 +14,15 @@ Sub-interval segmentation: one session_id may emit several `session_start`
 events (startup, then resume/clear/compact). Each `session_start` OPENS a
 sub-interval; it CLOSES at the next `session_end` for that session, or — if
 none appears before the following `session_start` or the end of the log — at
-the LAST heartbeat (prompt/stop/start) seen before that point. This single
+the LAST heartbeat (prompt/stop/tool/start) seen before that point. This single
 rule covers both the crash-without-session_end case and the closed-overnight
 gap (time while Claude was closed is never counted).
+
+Two exceptions. A `session_start` from compaction continues the open
+sub-interval as a heartbeat, because compaction does not leave the session.
+A `session_end` that follows a long idle stretch closes the sub-interval at
+most IDLE_TAIL_CAP_SECONDS after the last heartbeat. A session left open over
+a weekend is then not billed for the weekend when it is finally closed.
 
 Wall-clock (the billable number) = the UNION of sub-interval coverage per
 project (overlapping concurrent sessions are never summed), bucketed into
@@ -28,6 +34,7 @@ import argparse
 import csv
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -36,6 +43,10 @@ from datetime import date, datetime, timedelta, time
 
 HEARTBEAT_EVENTS = {"session_start", "prompt", "stop", "tool"}
 DEFAULT_IDLE_THRESHOLD_SECONDS = 15 * 60  # 15 minutes
+# How long past its last heartbeat a session closed after sitting idle is
+# billed. It is fixed. It does not follow --idle-threshold, so that flag never
+# changes wall-clock.
+IDLE_TAIL_CAP_SECONDS = 15 * 60
 
 
 def parse_duration(text, bare_unit_seconds=60):
@@ -198,6 +209,11 @@ def build_intervals(events):
             etype = ev.get("event")
             ts = ev["ts"]
             if etype == "session_start":
+                if cur_start is not None and ev.get("source") == "compact":
+                    # Compaction keeps the session going: a heartbeat, not a boundary.
+                    last_hb = ts
+                    hbs.append(ts)
+                    continue
                 if cur_start is not None:
                     intervals.append(_mk(cur_project, sid, cur_start, last_hb, hbs))
                 cur_start = ts
@@ -206,7 +222,8 @@ def build_intervals(events):
                 hbs = [ts]
             elif etype == "session_end":
                 if cur_start is not None:
-                    intervals.append(_mk(cur_project, sid, cur_start, ts, hbs))
+                    end = min(ts, last_hb + IDLE_TAIL_CAP_SECONDS)
+                    intervals.append(_mk(cur_project, sid, cur_start, end, hbs, closed=ts))
                     cur_start = None
                     cur_project = None
                     last_hb = None
@@ -220,12 +237,15 @@ def build_intervals(events):
     return intervals
 
 
-def _mk(project, sid, start, end, hbs):
+def _mk(project, sid, start, end, hbs, closed=None):
+    # `closed` is when the session really ended. It differs from `end` when the
+    # idle-tail cap applied. Engagement measures the idle tail against it.
     return {
         "project": project or "",
         "session_id": sid,
         "start": start,
         "end": end,
+        "closed": end if closed is None else closed,
         "heartbeats": list(hbs),
     }
 
@@ -288,21 +308,35 @@ def subtract_intervals(spans, holes):
     return result
 
 
-def _spans_to_project_days(spans_by_project, suppressed=None):
-    suppressed = suppressed or {}
+def _spans_to_project_days(spans_by_project):
     result = {}
     for project, spans in spans_by_project.items():
-        spans = subtract_intervals(spans, suppressed.get(project, []))
         day_secs = {}
-        for s, e in spans:
+        for s, e in union_intervals(spans):
             for d, secs in split_by_day(s, e):
                 day_secs[d] = day_secs.get(d, 0.0) + secs
         result[project] = day_secs
     return result
 
 
+def _spans_by_project(intervals, spans_of, suppressed=None):
+    """{project: [(start, end)]} of each interval's spans, minus its session's pauses.
+
+    A pause is cut from its own session only. A concurrent session in the same
+    project keeps the time it was active.
+    """
+    suppressed = suppressed or {}
+    result = {}
+    for iv in intervals:
+        holes = suppressed.get(iv["session_id"], [])
+        spans = result.setdefault(iv["project"], [])
+        for s, e in spans_of(iv):
+            spans.extend(subtract_intervals([(s, e)], holes))
+    return result
+
+
 def compute_suppressed(events):
-    """Return {project: [(start, end)]} of deliberately-paused spans.
+    """Return {session_id: [(start, end)]} of deliberately-paused spans.
 
     A `pause` marker opens a suppressed span; it closes at the earliest of an
     explicit `resume`, the next real `prompt` (auto-resume), a `session_end`,
@@ -310,62 +344,62 @@ def compute_suppressed(events):
     `until` timestamp that additionally caps the span: whatever closes it,
     nothing past `until` is suppressed (the pause expires on its own). `tool`
     heartbeats never close a pause (Claude may still be finishing a turn the
-    user paused through). Spans are attributed to the project of the nearest
-    preceding session_start, i.e. the cwd active when the pause was typed.
+    user paused through).
+
+    A `pause` that arrives after an open timed pause has expired starts a new
+    span. The expired one ends at its `until`. `tt` commands are not recorded
+    as prompts, so nothing else would close the expired pause first.
     """
     by_session = {}
     for ev in events:
         by_session.setdefault(ev.get("session_id", ""), []).append(ev)
 
     result = {}
-    for evs in by_session.values():
+    for sid, evs in by_session.items():
         evs = sorted(evs, key=lambda e: e["ts"])
-        # Fallback for a pause seen before any session_start (truncated log).
-        cur_proj = next(
-            (e.get("project", "") for e in evs if e.get("event") == "session_start"),
-            evs[0].get("project", "") if evs else "",
-        )
+        spans = []
+
+        def close(start, end):
+            if end > start:
+                spans.append((start, end))
+
         paused = False
         pstart = None
         puntil = None
-        pproj = None
         last_ts = None
         for ev in evs:
             t = ev["ts"]
             et = ev.get("event")
             last_ts = t
-            if et == "session_start":
-                cur_proj = ev.get("project", "") or cur_proj
             if et == "pause":
+                if paused and puntil is not None and t >= puntil:
+                    close(pstart, puntil)
+                    paused = False
                 if not paused:
                     paused = True
                     pstart = t
                     puntil = ev.get("until")
-                    pproj = cur_proj
             elif et in ("resume", "prompt", "session_end"):
                 if paused:
-                    end = t if puntil is None else min(t, puntil)
-                    if end > pstart:
-                        result.setdefault(pproj, []).append((pstart, end))
+                    close(pstart, t if puntil is None else min(t, puntil))
                     paused = False
                     pstart = None
                     puntil = None
         if paused:
-            end = last_ts if puntil is None else min(last_ts, puntil)
-            if end > pstart:
-                result.setdefault(pproj, []).append((pstart, end))
+            close(pstart, last_ts if puntil is None else min(last_ts, puntil))
+        if spans:
+            result[sid] = spans
     return result
 
 
 def wall_clock_by_project_day(intervals, suppressed=None):
     """Return {project: {date: seconds}} of unioned wall-clock time.
 
-    `suppressed` (from compute_suppressed) is removed from the coverage.
+    `suppressed` (from compute_suppressed) is removed from each session's own
+    coverage before the union.
     """
-    spans_by_project = {}
-    for iv in intervals:
-        spans_by_project.setdefault(iv["project"], []).append((iv["start"], iv["end"]))
-    return _spans_to_project_days(spans_by_project, suppressed)
+    spans = _spans_by_project(intervals, lambda iv: [(iv["start"], iv["end"])], suppressed)
+    return _spans_to_project_days(spans)
 
 
 def active_spans(interval, threshold):
@@ -375,8 +409,14 @@ def active_spans(interval, threshold):
     session_start and the closing boundary) that is STRICTLY longer than
     `threshold` seconds. Gaps at or under the threshold stay counted. A
     zero-duration interval contributes no active span.
+
+    The closing boundary is when the session really closed, not the capped
+    `end`. A session closed hours after its last heartbeat then has an idle
+    tail, not a 15-minute engaged one. Spans are clipped to `end`, so
+    engagement never exceeds wall-clock.
     """
-    pts = sorted(set([interval["start"]] + list(interval["heartbeats"]) + [interval["end"]]))
+    closed = interval.get("closed", interval["end"])
+    pts = sorted(set([interval["start"]] + list(interval["heartbeats"]) + [closed]))
     spans = []
     seg_start = interval["start"]
     prev = interval["start"]
@@ -390,7 +430,8 @@ def active_spans(interval, threshold):
         prev = t
     if prev > seg_start:
         spans.append((seg_start, prev))
-    return spans
+    end = interval["end"]
+    return [(s, min(e, end)) for s, e in spans if s < end]
 
 
 def engagement_by_project_day(intervals, threshold, suppressed=None):
@@ -400,11 +441,8 @@ def engagement_by_project_day(intervals, threshold, suppressed=None):
     session but active in a concurrent one is still counted as engaged.
     Deliberately-paused (`suppressed`) spans are also removed.
     """
-    spans_by_project = {}
-    for iv in intervals:
-        for s, e in active_spans(iv, threshold):
-            spans_by_project.setdefault(iv["project"], []).append((s, e))
-    return _spans_to_project_days(spans_by_project, suppressed)
+    spans = _spans_by_project(intervals, lambda iv: active_spans(iv, threshold), suppressed)
+    return _spans_to_project_days(spans)
 
 
 # --------------------------------------------------------------------------- #
@@ -685,7 +723,8 @@ def session_pause_state(events, session_id, now):
 
     A pause is open until a resume / real prompt / session_end; a timed pause
     (carrying `until`) additionally expires on its own once `now` passes it.
-    Returns None when not paused.
+    A new pause after an open timed pause expired replaces it, as in
+    compute_suppressed. Returns None when not paused.
     """
     state = None
     sess = sorted(
@@ -694,6 +733,8 @@ def session_pause_state(events, session_id, now):
     for ev in sess:
         et = ev.get("event")
         if et == "pause":
+            if state is not None and state[1] is not None and ev["ts"] >= state[1]:
+                state = None
             if state is None:
                 state = (ev["ts"], ev.get("until"))
         elif et in ("resume", "prompt", "session_end"):
@@ -846,8 +887,43 @@ def build_report(
     return render_markdown(wc, eng, projects, manual_rows, title=title)
 
 
+def _arg_date(text):
+    try:
+        return parse_date(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{text}' isn't a date. Use YYYY-MM-DD (e.g. 2026-05-04)")
+
+
+def _arg_month(text):
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}", text):
+            raise ValueError(text)
+        return month_range(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{text}' isn't a month. Use YYYY-MM (e.g. 2026-05)")
+
+
+def _arg_duration(text):
+    try:
+        secs = parse_duration(text)
+    except ValueError:
+        secs = None
+    if secs is None or not math.isfinite(secs) or secs < 0:
+        raise argparse.ArgumentTypeError(
+            f"'{text}' isn't a duration. Use 30m, 900s, 1h, or a bare number of minutes"
+        )
+    return secs
+
+
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        # `tt report` shows this text as its whole answer. The usage dump lists
+        # internal flags and would bury the one line that matters.
+        self.exit(2, f"{self.prog}: {message}.\n")
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Time Tracker report engine.")
+    parser = _Parser(description="Time Tracker report engine.")
     parser.add_argument(
         "--dir",
         help="Store directory (default: $TIME_TRACKER_DIR or ~/.time-tracker).",
@@ -855,12 +931,19 @@ def main(argv=None):
     parser.add_argument(
         "--idle-threshold",
         default="15m",
+        type=_arg_duration,
         help="Idle gap above which time is excluded from active-engagement "
         "(bare number = minutes; suffix s/m/h). Default 15m.",
     )
-    parser.add_argument("--from", dest="date_from", help="Start date (YYYY-MM-DD), inclusive.")
-    parser.add_argument("--to", dest="date_to", help="End date (YYYY-MM-DD), inclusive.")
-    parser.add_argument("--month", help="Whole-month shorthand (YYYY-MM) for --from/--to.")
+    parser.add_argument(
+        "--from", dest="date_from", type=_arg_date, help="Start date (YYYY-MM-DD), inclusive."
+    )
+    parser.add_argument(
+        "--to", dest="date_to", type=_arg_date, help="End date (YYYY-MM-DD), inclusive."
+    )
+    parser.add_argument(
+        "--month", type=_arg_month, help="Whole-month shorthand (YYYY-MM) for --from/--to."
+    )
     parser.add_argument("--customer", help="Restrict the report to one customer.")
     parser.add_argument("--csv", action="store_true", help="Emit CSV instead of a Markdown table.")
     parser.add_argument("--out", help="Write the report to this file instead of printing it.")
@@ -894,25 +977,20 @@ def main(argv=None):
     if args.period and (args.month or args.date_from or args.date_to):
         parser.error(f"'{args.period}' cannot be combined with --month/--from/--to")
 
-    date_from = date_to = None
     if args.period:
         date_from, date_to = period_range(args.period)
     elif args.month:
-        date_from, date_to = month_range(args.month)
+        date_from, date_to = args.month
     else:
-        if args.date_from:
-            date_from = parse_date(args.date_from)
-        if args.date_to:
-            date_to = parse_date(args.date_to)
+        date_from, date_to = args.date_from, args.date_to
 
     sdir = store_dir(args.dir)
     events_paths = discover_event_files(sdir, date_from, date_to)
     projects_path = os.path.join(sdir, "projects.toml")
     manual_path = os.path.join(sdir, "manual.jsonl")
-    idle = parse_duration(args.idle_threshold)
     out = build_report(
         events_paths,
-        idle_threshold=idle,
+        idle_threshold=args.idle_threshold,
         projects_path=projects_path,
         manual_path=manual_path,
         date_from=date_from,

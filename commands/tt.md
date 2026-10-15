@@ -20,8 +20,13 @@ path, this fallback **does cost a model turn** — you are the model running it.
 Run the dispatcher yourself and relay its `reason` field to the user:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/tt-dispatch.sh" "$ARGUMENTS"
+TT_PROJECT="$PWD" bash "${CLAUDE_PLUGIN_ROOT}/scripts/tt-dispatch.sh" "$ARGUMENTS"
 ```
+
+`TT_PROJECT` names the current project, which `add`, `map` and `status` use.
+`pause` and `resume` need the session id, which only the hook receives. From
+this fallback the dispatcher refuses them and says to type `tt pause` at the
+prompt. Relay that message as it is.
 
 For `report` specifically you may instead run the engine directly:
 

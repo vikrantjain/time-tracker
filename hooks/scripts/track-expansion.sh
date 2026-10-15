@@ -14,9 +14,10 @@ payload="$(cat 2>/dev/null || true)"
 command_name="$(printf '%s' "$payload" | jq -r '.command_name // ""' 2>/dev/null || true)"
 command_args="$(printf '%s' "$payload" | jq -r '.command_args // ""' 2>/dev/null || true)"
 
-# Only handle our command; tolerate bare and plugin-namespaced forms.
+# Only handle our command; tolerate bare and plugin-namespaced forms. Another
+# plugin's `<plugin>:tt` is not ours and passes through.
 case "$command_name" in
-  tt | time-tracker:tt | *:tt) ;;
+  tt | time-tracker:tt) ;;
   *) exit 0 ;;   # not ours — allow the expansion to proceed normally
 esac
 
