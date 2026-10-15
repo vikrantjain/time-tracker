@@ -203,6 +203,7 @@ case "$action" in
   map)
     # map [<customer>] [--name <label>] [--list] — map the CURRENT project to
     # a customer in projects.toml (hand-edits are preserved); bare form lists.
+    # map --remove [<path>] drops the current project's (or <path>'s) mapping.
     mapfile -d '' -t margs < <(tokenize "$rest")
     out="$(python3 "${CLAUDE_PLUGIN_ROOT}/scripts/tt-map.py" --dir "$store_dir" \
       --project "${TT_PROJECT:-}" "${margs[@]}" 2>&1)"
@@ -302,6 +303,7 @@ print(int(float(num) * mult))
       "                                (period: today, yesterday, week, last-week, month, last-month)" \
       "  status                        Tracking state, paused?, time today (this project + all)" \
       "  map [<customer>] [--name <n>] Map the current project to a customer (bare form lists)" \
+      "  map --remove [<path>]         Remove the current project's (or <path>'s) mapping" \
       "  add <dur> [--to <tgt>] [--on <date>] [note]" \
       "                                Log off-session time (default: current project, today)" \
       "  undo                          Strike the last 'tt add' entry (repeatable)" \

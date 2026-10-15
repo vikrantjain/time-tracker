@@ -231,6 +231,47 @@ export TT_PROJECT=""
 out="$(bash "$dispatch" 'map "Acme Corp"' | jq -r '.reason')"
 contains "map without project" "no current project" "$out"
 
+# 29. Remapping keeps a hand-written comment that sits above the NEXT table.
+new_store
+printf '["/proj/a"]\ncustomer = "A"\n\n# note about b\n["/proj/b"]\ncustomer = "B"\n' \
+  > "$TIME_TRACKER_DIR/projects.toml"
+export TT_PROJECT="/proj/a"
+bash "$dispatch" 'map "A2"' >/dev/null
+check "remap keeps next table's comment" \
+  "$(printf '["/proj/a"]\ncustomer = "A2"\n\n# note about b\n["/proj/b"]\ncustomer = "B"')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+
+# 30. tt map --remove drops the current project's table and nothing else.
+printf '\n# note about c\n["/proj/c"]\ncustomer = "C"\n' >> "$TIME_TRACKER_DIR/projects.toml"
+export TT_PROJECT="/proj/b"
+out="$(bash "$dispatch" 'map --remove' | jq -r '.reason')"
+contains "remove confirms" 'Removed the mapping for /proj/b (was "B")' "$out"
+check "remove leaves the rest verbatim" \
+  "$(printf '["/proj/a"]\ncustomer = "A2"\n\n# note about b\n\n# note about c\n["/proj/c"]\ncustomer = "C"')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+out="$(bash "$dispatch" 'map' | jq -r '.reason')"
+check "removed project no longer listed" "" "$(printf '%s' "$out" | grep '/proj/b' || true)"
+
+# 31. --remove <path> works from another project; the last table goes cleanly.
+export TT_PROJECT="/proj/elsewhere"
+bash "$dispatch" 'map --remove /proj/c' >/dev/null
+check "remove by path" \
+  "$(printf '["/proj/a"]\ncustomer = "A2"\n\n# note about b\n\n# note about c')" \
+  "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+
+# 32. --remove refuses what it can't act on, and changes nothing.
+before="$(cat "$TIME_TRACKER_DIR/projects.toml")"
+out="$(bash "$dispatch" 'map --remove' | jq -r '.reason')"
+contains "remove unmapped" "Not mapped: /proj/elsewhere" "$out"
+out="$(bash "$dispatch" 'map --remove "Acme Corp"' | jq -r '.reason')"
+contains "remove relative path" "isn't an absolute path" "$out"
+out="$(bash "$dispatch" 'map "A2" --remove' | jq -r '.reason')"
+contains "remove with customer" "takes a project path, not a customer" "$out"
+check "refusals change nothing" "$before" "$(cat "$TIME_TRACKER_DIR/projects.toml")"
+export TT_PROJECT=""
+out="$(bash "$dispatch" 'map --remove' | jq -r '.reason')"
+contains "remove without project" "no current project" "$out"
+
 # 20. An unmapped project in a report comes with the tt map hint.
 new_store
 export TT_SESSION_ID="sess9" TT_PROJECT="/proj/unmapped"
